@@ -130,8 +130,8 @@ export async function requestDeviceCode(
   );
   const text = await response.text();
   if (!response.ok) {
-    const { description } = await errorDescription(response, text);
-    throw new DeviceFlowError('server_error', description);
+    const { code, description } = await errorDescription(response, text);
+    throw new DeviceFlowError(code, description);
   }
   return JSON.parse(text) as DeviceCodeResponse;
 }
