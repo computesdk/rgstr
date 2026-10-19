@@ -8,7 +8,8 @@ forks and squatted copies get folded under it or flagged.
 `rgstr` is the CLI. The site is https://rgstr.org.
 
 ```bash
-npx rgstr claim          # in your package's directory
+npx @rgstr/cli claim          # in your package's directory
+npm i -g @rgstr/cli           # or install it: the command is `rgstr`
 ```
 
 ## The five commands
