@@ -176,6 +176,10 @@ export interface UseChange {
   diff?: string;
   /** For `manual`: the Setup page command to run instead. */
   command?: string;
+  /** For `written` / `removed`: the absolute path and the bytes `applyUse`
+   *  puts there (null = delete the file). Planned, not yet done. */
+  path?: string;
+  after?: string | null;
 }
 
 export interface UseOptions {
@@ -187,7 +191,25 @@ export interface UseOptions {
   dryRun?: boolean;
 }
 
+/** Plan, then write unless `dryRun`. Commands that confirm first call
+ *  `planUse` and `applyUse` themselves. */
 export async function runUse(opts: UseOptions): Promise<UseChange[]> {
+  const changes = await planUse(opts);
+  if (!opts.dryRun) await applyUse(changes);
+  return changes;
+}
+
+/** Write what `planUse` decided; everything else is already reported. */
+export async function applyUse(changes: UseChange[]): Promise<void> {
+  for (const ch of changes) {
+    if (!ch.path || (ch.action !== 'written' && ch.action !== 'removed')) continue;
+    if (ch.after == null) await fs.rm(ch.path);
+    else await fs.writeFile(ch.path, ch.after);
+  }
+}
+
+/** What `rgstr setup` would do to this project. Touches nothing. */
+export async function planUse(opts: Omit<UseOptions, 'dryRun'>): Promise<UseChange[]> {
   const ids = await detectClients(opts.dir, { npm: opts.npm, pip: opts.pip });
   const configs = clientConfigs(opts.origin, ids);
   const changes: UseChange[] = [];
@@ -231,11 +253,7 @@ export async function runUse(opts: UseOptions): Promise<UseChange[]> {
       }
       // Only a file rgstr created goes away; a pre-existing empty file stays empty.
       const after = createdFile && content.length === 0 ? null : content;
-      if (!opts.dryRun) {
-        if (after == null) await fs.rm(full);
-        else await fs.writeFile(full, after);
-      }
-      changes.push({ file, clients, action: 'removed', diff: unifiedDiff(file, current, after) });
+      changes.push({ file, clients, action: 'removed', diff: unifiedDiff(file, current, after), path: full, after });
       continue;
     }
     const lines = cs.flatMap((c, i) => (i === 0 ? c.lines : ['', ...c.lines]));
@@ -245,8 +263,56 @@ export async function runUse(opts: UseOptions): Promise<UseChange[]> {
       changes.push({ file, clients, action: 'unchanged' });
       continue;
     }
-    if (!opts.dryRun) await fs.writeFile(full, next);
-    changes.push({ file, clients, action: 'written', diff: unifiedDiff(file, current, next) });
+    changes.push({ file, clients, action: 'written', diff: unifiedDiff(file, current, next), path: full, after: next });
   }
   return changes;
+}
+
+export interface StatusFile {
+  file: string;
+  clients: ClientId[];
+  /** The rgstr origin the file points installs at. */
+  origin: string;
+  /** True when it is our managed block; false for a line someone wrote by hand. */
+  managed: boolean;
+}
+
+const ORIGIN_RE = /(https?:\/\/[^\s"'/]+)\/api\/(?:registry|pypi)\b/;
+
+function clientsForFile(file: string, text: string): ClientId[] {
+  const base = path.basename(file);
+  if (base === '.npmrc') return ['npm'];
+  if (base === '.yarnrc.yml') return ['yarn'];
+  if (base === 'bunfig.toml') return ['bun'];
+  if (base === 'pip.conf') return ['pip'];
+  const out: ClientId[] = [];
+  if (text.includes('tool.uv.index')) out.push('uv');
+  if (text.includes('tool.poetry.source')) out.push('poetry');
+  return out;
+}
+
+/** `rgstr status`: every config file in the project that sends installs to
+ *  an rgstr origin, whether `rgstr setup` wrote it or not. */
+export async function projectStatus(dir: string): Promise<StatusFile[]> {
+  const pipPlaces = [process.env.VIRTUAL_ENV, path.join(dir, '.venv')]
+    .filter((v): v is string => !!v)
+    .map((v) => path.relative(dir, path.join(v, 'pip.conf')) || path.join(v, 'pip.conf'));
+  const out: StatusFile[] = [];
+  for (const file of [...new Set([...MANAGED_FILES, ...pipPlaces])]) {
+    const full = path.join(dir, file);
+    if (!(await exists(full))) continue;
+    const current = await fs.readFile(full, 'utf8');
+    const start = current.indexOf(BLOCK_START);
+    const end = start === -1 ? -1 : current.indexOf(BLOCK_END, start);
+    const managed = start !== -1 && end !== -1;
+    const text = managed ? current.slice(start, end) : current;
+    const live = text
+      .split('\n')
+      .filter((l) => !/^\s*[#;]/.test(l))
+      .join('\n');
+    const origin = live.match(ORIGIN_RE)?.[1];
+    if (!origin) continue;
+    out.push({ file, clients: clientsForFile(file, text), origin, managed });
+  }
+  return out;
 }

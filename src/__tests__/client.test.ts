@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { RgstrClient, RgstrCliError, isSecureTransport, isTrustedHost, resolveAuth } from '../client.js';
-import { discoverAuthServer, requestDeviceCode } from '../auth.js';
+import { deviceLogin, discoverAuthServer, oauthClients, requestDeviceCode } from '../auth.js';
 import { parseRouteSpec } from '../routes.js';
 
 const ENV = ['RGSTR_TOKEN', 'RGSTR_ORG', 'RGSTR_URL', 'RGSTR_HOME'] as const;
@@ -131,5 +131,55 @@ describe('route specs', () => {
     expect(parseRouteSpec('pypi:tsc-rs', 'tsc-rs')).toEqual({ versionRange: '*', upstreamKind: 'pypi', upstreamName: null });
     expect(() => parseRouteSpec('github:owner/repo@v1.2.3', 'tsc-rs')).toThrow(/github: routes are not supported yet/);
     expect(() => parseRouteSpec('tsc-rs', 'tsc-rs')).toThrow(/npm:<name>@<range>/);
+  });
+});
+
+describe('login scopes', () => {
+  const server = { authBaseUrl: 'https://platform.computesdk.com/api/auth', resource: 'https://platform.computesdk.com/api/v1' };
+
+  it('asks for the registry-only client first and falls back to the platform client when the server rejects it', async () => {
+    expect(oauthClients({})).toEqual([
+      { clientId: 'rgstr-cli', scope: 'registry:read registry:write offline_access' },
+      { clientId: 'benchsdk-cli', scope: 'packages:read packages:write org:read org:admin offline_access' },
+    ]);
+    expect(oauthClients({ RGSTR_OAUTH_CLIENT_ID: 'dev-cli' })).toEqual([{ clientId: 'dev-cli', scope: 'registry:read registry:write offline_access' }]);
+
+    const asked: string[] = [];
+    const fetchImpl = (async (url: string, init?: RequestInit) => {
+      if (url.endsWith('/.well-known/oauth-protected-resource/api/v1')) {
+        return new Response(JSON.stringify({ resource: server.resource, authorization_servers: [server.authBaseUrl] }));
+      }
+      const body = init?.body as URLSearchParams;
+      if (url.endsWith('/device/code')) {
+        asked.push(`${body.get('client_id')} ${body.get('scope')}`);
+        if (body.get('client_id') === 'rgstr-cli') return new Response(JSON.stringify({ error: 'invalid_client', error_description: 'unknown client' }), { status: 400 });
+        return new Response(JSON.stringify({ device_code: 'd', user_code: 'ABCD', verification_uri: 'https://platform.computesdk.com/device', expires_in: 1, interval: 0 }));
+      }
+      expect(body.get('client_id')).toBe('benchsdk-cli');
+      return new Response(JSON.stringify({ access_token: 'at', token_type: 'Bearer', expires_in: 3600, scope: 'packages:read packages:write org:read org:admin offline_access' }));
+    }) as unknown as typeof fetch;
+    const creds = await deviceLogin({ baseUrl: 'https://rgstr.org', fetchImpl });
+    expect(asked).toEqual(['rgstr-cli registry:read registry:write offline_access', 'benchsdk-cli packages:read packages:write org:read org:admin offline_access']);
+    expect(creds).toMatchObject({ clientId: 'benchsdk-cli', scope: 'packages:read packages:write org:read org:admin offline_access', token: 'at' });
+  });
+
+  it('keeps the registry client when the server accepts it, and surfaces a rejection of the last client', async () => {
+    const accepting = (async (url: string, init?: RequestInit) => {
+      if (url.endsWith('/.well-known/oauth-protected-resource/api/v1')) {
+        return new Response(JSON.stringify({ resource: server.resource, authorization_servers: [server.authBaseUrl] }));
+      }
+      if (url.endsWith('/device/code')) return new Response(JSON.stringify({ device_code: 'd', user_code: 'ABCD', verification_uri: 'https://x', expires_in: 1, interval: 0 }));
+      expect((init?.body as URLSearchParams).get('client_id')).toBe('rgstr-cli');
+      return new Response(JSON.stringify({ access_token: 'at', token_type: 'Bearer', expires_in: 3600, scope: 'registry:read registry:write' }));
+    }) as unknown as typeof fetch;
+    expect(await deviceLogin({ baseUrl: 'https://rgstr.org', fetchImpl: accepting })).toMatchObject({ clientId: 'rgstr-cli', scope: 'registry:read registry:write' });
+
+    const rejecting = (async (url: string) => {
+      if (url.endsWith('/.well-known/oauth-protected-resource/api/v1')) {
+        return new Response(JSON.stringify({ resource: server.resource, authorization_servers: [server.authBaseUrl] }));
+      }
+      return new Response(JSON.stringify({ error: 'invalid_scope', error_description: 'nope' }), { status: 400 });
+    }) as unknown as typeof fetch;
+    await expect(deviceLogin({ baseUrl: 'https://rgstr.org', fetchImpl: rejecting })).rejects.toThrow(/nope/);
   });
 });

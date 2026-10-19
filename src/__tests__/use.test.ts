@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { applyBlock, clientConfigs, detectClients, runUse, stripBlock, unifiedDiff } from '../use.js';
+import { applyBlock, applyUse, clientConfigs, detectClients, planUse, projectStatus, runUse, stripBlock, unifiedDiff } from '../use.js';
 
 const ORIGIN = 'https://rgstr.org';
 
@@ -152,5 +152,42 @@ describe('rgstr use edge cases', () => {
     const off = await runUse({ dir, origin: ORIGIN, off: true });
     expect(off.map((c) => [c.file, c.action])).toEqual([['.npmrc', 'removed']]);
     expect(await fs.readFile(path.join(dir, '.npmrc'), 'utf8')).toBe('a=1\n');
+  });
+});
+
+describe('rgstr setup plans before it writes', () => {
+  async function tmp(files: Record<string, string>) {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'rgstr-use-'));
+    for (const [f, c] of Object.entries(files)) await fs.writeFile(path.join(dir, f), c);
+    return dir;
+  }
+
+  it('planUse touches nothing; applyUse writes exactly the plan', async () => {
+    const dir = await tmp({ 'package.json': '{}', '.npmrc': 'a=1\n' });
+    const plan = await planUse({ dir, origin: ORIGIN });
+    expect(plan.map((c) => [c.file, c.action])).toEqual([['.npmrc', 'written']]);
+    expect(plan[0].diff).toContain('+registry=https://rgstr.org/api/registry');
+    expect(await fs.readFile(path.join(dir, '.npmrc'), 'utf8')).toBe('a=1\n');
+    await applyUse(plan);
+    expect(await fs.readFile(path.join(dir, '.npmrc'), 'utf8')).toBe(plan[0].after);
+    const off = await planUse({ dir, origin: ORIGIN, off: true });
+    expect(off[0]).toMatchObject({ action: 'removed', after: 'a=1\n' });
+    expect(await fs.readFile(path.join(dir, '.npmrc'), 'utf8')).toContain('rgstr');
+    await applyUse(off);
+    expect(await fs.readFile(path.join(dir, '.npmrc'), 'utf8')).toBe('a=1\n');
+  });
+
+  it('status reports managed blocks, hand-written pointers, and nothing when off', async () => {
+    const dir = await tmp({ 'package.json': '{}', 'pyproject.toml': '[project]\nname = "x"\n', 'uv.lock': '' });
+    expect(await projectStatus(dir)).toEqual([]);
+    await runUse({ dir, origin: ORIGIN });
+    const on = await projectStatus(dir);
+    expect(on).toEqual([
+      { file: '.npmrc', clients: ['npm'], origin: ORIGIN, managed: true },
+      { file: 'pyproject.toml', clients: ['uv'], origin: ORIGIN, managed: true },
+    ]);
+    await runUse({ dir, origin: ORIGIN, off: true });
+    await fs.writeFile(path.join(dir, '.npmrc'), '# registry=https://rgstr.org/api/registry\nregistry=https://rgstr.localhost:3000/api/registry\n');
+    expect(await projectStatus(dir)).toEqual([{ file: '.npmrc', clients: ['npm'], origin: 'https://rgstr.localhost:3000', managed: false }]);
   });
 });

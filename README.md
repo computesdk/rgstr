@@ -12,24 +12,38 @@ npx @rgstr/cli claim          # in your package's directory
 npm i -g @rgstr/cli           # or install it: the command is `rgstr`
 ```
 
-## The five commands
+Nothing edits your files unless you ask: `claim` prints, `--write` writes;
+`setup` shows the diff and asks, `--yes` skips the question.
+
+## The commands
 
 | | |
 | --- | --- |
-| `rgstr claim` | File the claim for the package in the current directory and write the publish-proof token into `package.json` / `pyproject.toml` (or the README badge with `--badge`). Publish a patch, then `rgstr claim --check` to verify. |
+| `rgstr claim [name]` | File the claim and print the proof, badge first: the README badge to merge into the package's repository, an agent prompt that does exactly that, and the manifest line for your next release. `--write` adds the manifest line to `package.json` / `pyproject.toml` here (diff first). `rgstr claim --check` tells you which proof matched. |
 | `rgstr whois <name>` | Who holds a name, how much to trust it (unclaimed / claimed / verified), where it routes, and whether it is disputed. No login needed. |
 | `rgstr search <query>` | Names in rgstr's order, with trust and weekly downloads. |
-| `rgstr setup` | Sign in if needed, pick your org, and point this project's installs at rgstr: writes `.npmrc` (and yarn/bun/uv/poetry config when those are in use). `--off` removes exactly what it wrote. |
+| `rgstr setup` | Point this project's installs at rgstr: shows the `.npmrc` (and yarn/bun/uv/poetry/pip) diff, asks, writes, then says what changed. `--yes` to skip the question, `--dry-run` to only look, `--off` removes exactly what it wrote. Signs you in first if needed. |
+| `rgstr status` | Is this project pointed at rgstr, through which files, as which org and login. |
 | `rgstr route <name> --to npm:other@^1` | Route a name you hold to the package that really ships it. |
 
-Plus `rgstr login` / `logout` / `whoami` (device-code sign-in with a
-ComputeSDK account) and `rgstr org use <slug>` to pick the organization that
-holds your names.
+Plus `rgstr login` / `logout` / `whoami` (device-code sign-in; the login asks
+only for registry access, not the rest of the platform) and
+`rgstr org use <slug>` to pick the organization that holds your names.
+
+## Claim your name with an agent
+
+`rgstr claim <name>` prints a badge like
+`[![rgstr](https://rgstr.org/registry/<name>/badge.svg?proof=rgstr_…)](https://rgstr.org/registry/<name>)`
+and a one-paragraph prompt. Paste the prompt into your coding agent: it adds
+the badge to the README of the repository the package declares, opens a PR,
+merges it. Then `rgstr claim --check <name>` — rgstr reads the badge off
+GitHub and the name is yours. No release, no OAuth scopes.
 
 ## For CI
 
 ```bash
 RGSTR_TOKEN=<org API key> RGSTR_ORG=<slug> rgstr claim --check --json
+rgstr setup --yes --json      # --json never prompts: without --yes it reports the plan
 ```
 
 Every command takes `--json`.
