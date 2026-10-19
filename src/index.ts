@@ -350,6 +350,7 @@ type ClaimOpts = {
   yes?: boolean;
   pr?: boolean;
   all?: boolean;
+  here?: boolean;
   npm?: boolean;
   pip?: boolean;
   statement?: string;
@@ -503,7 +504,7 @@ async function claimOne(
   // the repository the package declares.
   const declared = plan.repoUrl;
   const here = ctx.checkout.remote;
-  const declaredDir = declared && here && sameRepo(declared, here) ? repoDirectoryFrom(declared) : undefined;
+  const declaredDir = !opts.here && declared && here && sameRepo(declared, here) ? repoDirectoryFrom(declared) : undefined;
   const { file, exists, where } = await readmeFor({ ...t, manifest: t.manifest ?? '' }, ctx.checkout.root, ctx.single, declaredDir);
   const rel = path.relative(ctx.dir, file) || path.basename(file);
   if (declared && here && !sameRepo(declared, here)) {
@@ -525,7 +526,9 @@ async function claimOne(
     say(`\n(${name} declares no repository on ${ecosystem === 'npm' ? 'npm' : 'PyPI'}${here ? `; this checkout is ${shortRepo(here)}` : ''}. Add \`repository\` to the manifest in your next release so rgstr knows where to look.)`);
   }
 
-  if (where === 'root') {
+  if (opts.here && declared && repoDirectoryFrom(declared) === null && path.resolve(ctx.checkout.root) !== path.resolve(t.dir)) {
+    say(`\n--here: the badge stays in ${rel}. rgstr reads the repository's root README on GitHub, not this one, so the claim verifies when this README ships in your next ${ecosystem === 'npm' ? 'npm' : 'PyPI'} release (rgstr claim --check ${name} after publishing).`);
+  } else if (where === 'root') {
     const manifestRel = path.relative(ctx.checkout.root, t.manifest ?? t.dir).split(path.sep).join('/');
     const pkgDir = path.relative(ctx.checkout.root, t.dir).split(path.sep).join('/');
     say(
@@ -575,6 +578,7 @@ program
   .option('-y, --yes', 'write the badge without asking (the diff is still shown)')
   .option('--pr', 'after writing: branch rgstr-badge-<name>, commit, push, open the pull request with gh')
   .option('--all', 'at a workspace root (pnpm/npm/yarn workspaces, uv): claim every member package; without it the root only lists them')
+  .option('--here', "keep the badge in this package's own README even when the registry points at the repository root — it then verifies on the next publish (the badge ships in the package README) rather than on merge")
   .option('--write', 'also write the publish-proof token into package.json / pyproject.toml here (shows the diff first)')
   .addOption(new Option('--manifest', 'same as --write').hideHelp())
   .addOption(new Option('--badge', 'same as --yes').hideHelp())
