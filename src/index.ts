@@ -576,7 +576,9 @@ program
       const prefer: Ecosystem | undefined = opts.pip ? 'pypi' : opts.npm ? 'npm' : undefined;
       const found = await detectPackages(dir, { prefer, all: opts.all });
       const workspaceRoot = (await workspaceGlobs(dir)).length > 0;
-      const choice = chooseTargets(found, workspaceRoot, { name: nameArg, all: opts.all });
+      // --check files nothing and writes nothing, so at a workspace root it
+      // covers every member without --all.
+      const choice = chooseTargets(found, workspaceRoot, { name: nameArg, all: opts.all || opts.check });
       if (choice.kind === 'workspace') {
         const list = choice.names.join(', ');
         if (g.json) printJson({ workspace: true, packages: choice.names, hint: 'pass --all to claim them all, or a name' });
