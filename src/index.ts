@@ -27,6 +27,7 @@ import { formatRouteRow, parseRouteSpec, type RouteInput, type RouteRecord } fro
 import { applyUse, planUse, projectStatus, unifiedDiff, type UseChange } from './use.js';
 import { buildClaimPlan, fetchRepoUrl, proofKindLabel, renderClaimPlan, repoDirectoryFrom, type ProofSightingLike } from './claim.js';
 import { confirm, isInteractive } from './prompt.js';
+import { checkRow, checkTableRows, mapLimit, readDependencies, summaryLine, unansweredRow, type CheckRow, type Dependency } from './check.js';
 
 const require = createRequire(import.meta.url);
 const { version } = require('../package.json') as { version: string };
@@ -315,6 +316,85 @@ program
               ? `signed in, but the login could not be refreshed (${auth.error}) — try again online or \`rgstr login\``
               : 'not signed in — `rgstr login`';
       console.log(kv([['project', dir], ['rgstr', rgstr], ['org', auth.org ?? '(none — rgstr org use <slug>)'], ['auth', who]]));
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+// ── check ─────────────────────────────────────────────────────────────────
+
+program
+  .command('check [names...]')
+  .description('what resolving this project\'s dependencies through rgstr does: per name, who holds it and where it is served from')
+  .action(async (names: string[]) => {
+    try {
+      const g = globals();
+      const dir = process.cwd();
+      const files = await projectStatus(dir);
+      if (files.length === 0) {
+        throw new RgstrCliError('not_configured', 'This project is not pointed at rgstr (no .npmrc / pip config written for it) — run `npx @rgstr/cli setup` first.');
+      }
+      // Ask the origin the project's installs actually go to, unless told otherwise.
+      const baseUrl = g.baseUrl || process.env.RGSTR_URL || files[0].origin;
+      const c = new RgstrClient(await resolveAuth({ ...g, baseUrl, optional: true }));
+      const read = await readDependencies(dir);
+      // Only the ecosystems this project actually sends through rgstr: a
+      // `.npmrc` alone says nothing about what pip installs.
+      const pointed = new Set<Ecosystem>(files.flatMap((f) => f.clients.map((id) => (id === 'pip' || id === 'uv' || id === 'poetry' ? 'pypi' : 'npm'))));
+      const notPointed = read.deps.filter((d) => !pointed.has(d.ecosystem));
+      let deps: Dependency[];
+      if (names.length) {
+        const only = new Set(names);
+        const known = read.deps.filter((d) => only.has(d.name));
+        const pyOnly = read.files.length > 0 && !read.files.includes('package.json');
+        const missing = names.filter((n) => !known.some((d) => d.name === n)).map((n) => ({ name: n, ecosystem: pyOnly ? ('pypi' as const) : ('npm' as const), source: '(argument)', section: 'argument' }));
+        deps = [...known, ...missing];
+      } else deps = read.deps.filter((d) => pointed.has(d.ecosystem));
+
+      const rows: CheckRow[] = await mapLimit(deps, 8, async (d) => {
+        try {
+          return checkRow(d, await c.get<WhoisResponse>(`/api/v1/registry/whois/${encodeURIComponent(d.name)}`));
+        } catch (err) {
+          // A bad name is that name's problem; anything else means the check could not run.
+          if (err instanceof RgstrApiError && err.status >= 400 && err.status < 500 && err.status !== 401 && err.status !== 403) return unansweredRow(d, err.message);
+          throw err;
+        }
+      });
+      const summary = summaryLine(rows);
+      if (g.json) {
+        printJson({
+          dir,
+          origin: c.baseUrl,
+          files: files.map((f) => f.file),
+          manifests: read.files,
+          names: rows,
+          skipped: names.length ? [] : read.skipped,
+          notPointed: names.length ? [] : notPointed,
+          held: rows.filter((r) => r.held).length,
+          total: rows.length,
+          summary,
+        });
+        return;
+      }
+      const notes: string[] = [];
+      if (!names.length && read.skipped.length) {
+        notes.push(`(${read.skipped.length} not checked: ${read.skipped.map((s) => `${s.name} is ${s.spec}`).join(', ')} — not fetched from a registry.)`);
+      }
+      if (!names.length && notPointed.length) {
+        const py = notPointed[0].ecosystem === 'pypi';
+        notes.push(`(${notPointed.length} ${py ? 'PyPI' : 'npm'} name${notPointed.length === 1 ? '' : 's'} not checked: ${py ? 'pip' : 'npm'} installs here do not go through rgstr — \`rgstr setup ${py ? '--pip' : '--npm'}\` to point them at it.)`);
+      }
+      console.log(`Installs here resolve through ${c.baseUrl} (${files.map((f) => f.file).join(', ')}).`);
+      if (rows.length === 0) {
+        console.log(read.files.length ? `No dependencies to check in ${read.files.join(' / ')}.` : 'No package.json, pyproject.toml or requirements.txt here — pass the names: rgstr check <name…>');
+        for (const n of notes) console.log(n);
+        return;
+      }
+      console.log('');
+      console.log(table(checkTableRows(rows), ['name', 'trust', 'holder', 'served from']));
+      console.log('');
+      console.log(summary);
+      for (const n of notes) console.log(n);
     } catch (err) {
       fail(err);
     }
