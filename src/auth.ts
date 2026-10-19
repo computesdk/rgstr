@@ -9,7 +9,7 @@ import { isSecureTransport } from './hosts.js';
 /** The registry-only client: a login that can claim, route and read names
  *  and nothing else on the platform. */
 export const RGSTR_OAUTH_CLIENT_ID = 'rgstr-cli';
-export const RGSTR_OAUTH_SCOPE = 'registry:read registry:write offline_access';
+export const RGSTR_OAUTH_SCOPE = 'packages:read packages:write org:read offline_access';
 /** What 0.0.x logged in as: the platform-wide CLI client. Still used when the
  *  authorization server does not know the registry client yet. */
 export const PLATFORM_OAUTH_CLIENT_ID = 'benchsdk-cli';

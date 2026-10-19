@@ -463,6 +463,9 @@ async function claimOne(
 
   let wrote: { file: string; line: string } | null = null;
   if (plan && claim.proof && (opts.write || opts.manifest)) {
+    if (t.manifest?.endsWith('setup.cfg')) {
+      throw new RgstrCliError('invalid_argument', `--write needs a pyproject.toml ([project.urls]); setup.cfg has no place for the proof URL. Use the README badge instead — \`rgstr claim ${name}\` in the repository checkout puts it there.`);
+    }
     if (t.manifest && t.ecosystem === ecosystem) {
       const source = await fs.readFile(t.manifest, 'utf8');
       const { next, changed } = ecosystem === 'npm' ? withNpmProof(source, claim.proof.token) : withPypiProof(source, plan.manifest);
@@ -508,7 +511,14 @@ async function claimOne(
     out.readme = { file: rel, action: 'wrong_repo', reason: `declared ${declared}, checkout ${here}` };
     return out;
   }
-  if (declared && !here) say(`\n(no \`origin\` remote here; ${name} declares ${shortRepo(declared)} — that is where the badge must end up.)`);
+  if (declared && !here) {
+    // Without a remote to compare, writing could leak the token into a
+    // checkout of some other repository; print instead.
+    say(`\nNo \`origin\` remote here, so this checkout cannot be matched to ${shortRepo(declared)} (where the badge must land) — nothing was written.`);
+    printPlan();
+    out.readme = { file: rel, action: 'wrong_repo', reason: `declared ${declared}, no origin remote` };
+    return out;
+  }
   if (!declared) {
     say(`\n(${name} declares no repository on ${ecosystem === 'npm' ? 'npm' : 'PyPI'}${here ? `; this checkout is ${shortRepo(here)}` : ''}. Add \`repository\` to the manifest in your next release so rgstr knows where to look.)`);
   }

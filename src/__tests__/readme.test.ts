@@ -10,6 +10,7 @@ import {
   gitCheckout,
   nextSteps,
   openBadgePr,
+  shellQuote,
   planBadge,
   readmeFor,
   sameRepo,
@@ -67,6 +68,12 @@ describe('package detection', () => {
     });
     expect(await workspaceGlobs(root)).toEqual(['packages/*', 'tools/cli', 'py/*']);
     expect((await expandGlobs(root, ['packages/*', 'tools/cli', 'missing/*'])).map((d) => path.relative(root, d))).toEqual(['packages/a', 'packages/b', 'packages/c', 'tools/cli']);
+    await fs.mkdir(path.join(root, 'packages/group/deep'), { recursive: true });
+    await fs.writeFile(path.join(root, 'packages/group/deep/package.json'), '{"name":"@acme/deep"}');
+    expect((await expandGlobs(root, ['packages/**'])).map((d) => path.relative(root, d))).toEqual(['packages', 'packages/a', 'packages/b', 'packages/c', 'packages/group', 'packages/group/deep']);
+    const deepRoot = await tmp({ 'package.json': '{"name":"r","private":true,"workspaces":["packages/**"]}', 'packages/group/deep/package.json': '{"name":"@acme/deep"}' });
+    expect((await detectPackages(deepRoot)).map((t) => t.name)).toEqual(['@acme/deep']);
+    await fs.rm(path.join(root, 'packages/group'), { recursive: true });
     const found = await detectPackages(root);
     expect(found.map((t) => `${t.ecosystem}:${t.name}`)).toEqual(['npm:@acme/a', 'npm:@acme/b', 'pypi:acme-lib', 'pypi:acme-old', 'npm:acme-cli']);
     expect(found[0]).toMatchObject({ version: '1.0.0', dir: path.join(root, 'packages/a') });
@@ -138,19 +145,26 @@ describe('badge placement', () => {
 });
 
 describe('after the write', () => {
-  it('tells you how to land it', () => {
+  it('tells you how to land it, shell-safe', () => {
     expect(nextSteps(['README.md'], ['tsc-rs'])).toEqual([
-      'git add README.md && git commit -m "Add rgstr badge" && git push',
+      'git add -- README.md && git commit -m "Add rgstr badge" && git push',
       'open a pull request with that commit and merge it',
       'rgstr claim --check tsc-rs',
     ]);
+    expect(nextSteps(['my docs/README.md'], ['@scope/pkg', 'x;rm -rf ~'])).toEqual([
+      `git add -- 'my docs/README.md' && git commit -m "Add rgstr badge" && git push`,
+      'open a pull request with that commit and merge it',
+      'rgstr claim --check @scope/pkg',
+      `rgstr claim --check 'x;rm -rf ~'`,
+    ]);
+    expect(shellQuote("it's")).toBe(`'it'\\''s'`);
   });
 
   it('--pr: branch, commit, push, gh pr create — or say why not, touching nothing', async () => {
     const calls: string[] = [];
     const checkout = { root: '/work/ts-rust', remote: 'https://github.com/pingdotgg/ts-rust', branch: 'main' };
     const ok = (async (cmd: string, args: string[]) => {
-      calls.push([cmd, ...args.slice(0, 3)].join(' '));
+      calls.push([cmd, ...args.slice(0, cmd === 'git' && args[0] === 'commit' ? 5 : 3)].join(' '));
       if (cmd === 'gh' && args[0] === 'pr') return { stdout: 'Creating pull request…\nhttps://github.com/pingdotgg/ts-rust/pull/42\n', stderr: '' };
       return { stdout: '', stderr: '' };
     }) as never;
@@ -158,8 +172,8 @@ describe('after the write', () => {
     expect(calls).toEqual([
       'gh auth status',
       'git checkout -b rgstr-badge-tsc-rs',
-      'git add /work/ts-rust/README.md',
-      'git commit -m Add rgstr badge',
+      'git add -- /work/ts-rust/README.md',
+      'git commit -m Add rgstr badge -- /work/ts-rust/README.md',
       'git push -u origin',
       'gh pr create --title',
     ]);

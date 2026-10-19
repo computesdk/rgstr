@@ -94,8 +94,25 @@ export async function workspaceGlobs(dir: string): Promise<string[]> {
   return [...new Set(globs.filter((g) => !g.startsWith('!')))];
 }
 
-/** Expand `packages/*`-style globs (one `*` segment, or a literal path) to
- *  directories that exist. Enough for workspace manifests; not a full glob. */
+/** Every directory below `dir` (skipping dot-dirs and node_modules). */
+async function descendantDirs(dir: string): Promise<string[]> {
+  const out: string[] = [];
+  let entries: import('node:fs').Dirent[] = [];
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true });
+  } catch {
+    return out;
+  }
+  for (const e of entries) {
+    if (!e.isDirectory() || e.name.startsWith('.') || e.name === 'node_modules') continue;
+    const full = path.join(dir, e.name);
+    out.push(full, ...(await descendantDirs(full)));
+  }
+  return out;
+}
+
+/** Expand workspace globs (`packages/*`, `packages/**`, `apps/web-*`, or a
+ *  literal path) to directories that exist. Enough for workspace manifests. */
 export async function expandGlobs(dir: string, globs: string[]): Promise<string[]> {
   const out = new Set<string>();
   for (const g of globs) {
@@ -104,7 +121,9 @@ export async function expandGlobs(dir: string, globs: string[]): Promise<string[
     for (const part of parts) {
       const next: string[] = [];
       for (const d of dirs) {
-        if (part === '*' || part === '**') {
+        if (part === '**') {
+          next.push(d, ...(await descendantDirs(d)));
+        } else if (part === '*') {
           try {
             for (const e of await fs.readdir(d, { withFileTypes: true })) if (e.isDirectory() && !e.name.startsWith('.') && e.name !== 'node_modules') next.push(path.join(d, e.name));
           } catch {
@@ -237,12 +256,17 @@ export function planBadge(source: string | null, name: string, badge: string): B
   return { kind: 'insert', next: lines.join('\n') };
 }
 
+/** Quote for a POSIX shell unless it is plainly safe. */
+export function shellQuote(s: string): string {
+  return /^[A-Za-z0-9@%+=:,./_-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
 /** What to do once the badge is in the working tree. */
 export function nextSteps(readmeRels: string[], names: string[]): string[] {
   return [
-    `git add ${readmeRels.join(' ')} && git commit -m "Add rgstr badge" && git push`,
+    `git add -- ${readmeRels.map(shellQuote).join(' ')} && git commit -m "Add rgstr badge" && git push`,
     'open a pull request with that commit and merge it',
-    ...names.map((n) => `rgstr claim --check ${n}`),
+    ...names.map((n) => `rgstr claim --check ${shellQuote(n)}`),
   ];
 }
 
@@ -272,8 +296,9 @@ export async function openBadgePr(
   const checks = names.map((n) => `rgstr claim --check ${n}`).join('; ');
   const body = `Proves ownership of ${list} on rgstr: rgstr reads the badge off the README on GitHub, so no release is needed. After merging, run \`${checks}\`.`;
   await git('checkout', '-b', branch);
-  await git('add', ...files);
-  await git('commit', '-m', names.length === 1 ? 'Add rgstr badge' : 'Add rgstr badges');
+  await git('add', '--', ...files);
+  // Only the READMEs: anything else already staged stays out of this commit.
+  await git('commit', '-m', names.length === 1 ? 'Add rgstr badge' : 'Add rgstr badges', '--', ...files);
   await git('push', '-u', 'origin', branch);
   const { stdout } = await exec('gh', ['pr', 'create', '--title', names.length === 1 ? 'Add rgstr badge' : 'Add rgstr badges', '--body', body, '--head', branch], { cwd: checkout.root });
   const url = stdout.trim().split('\n').find((l) => /^https?:\/\//.test(l)) ?? stdout.trim();

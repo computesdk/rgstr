@@ -26,8 +26,8 @@ Nothing edits your files unless you ask: `claim` prints, `--write` writes;
 | `rgstr status` | Is this project pointed at rgstr, through which files, as which org and login. |
 | `rgstr route <name> --to npm:other@^1` | Route a name you hold to the package that really ships it. |
 
-Plus `rgstr login` / `logout` / `whoami` (device-code sign-in; the login asks
-only for registry access, not the rest of the platform) and
+Plus `rgstr login` / `logout` / `whoami` (device-code sign-in as the `rgstr-cli`
+client: packages and org read, nothing else on the platform) and
 `rgstr org use <slug>` to pick the organization that holds your names.
 
 ## Claim your name with an agent

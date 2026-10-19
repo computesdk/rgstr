@@ -139,10 +139,10 @@ describe('login scopes', () => {
 
   it('asks for the registry-only client first and falls back to the platform client when the server rejects it', async () => {
     expect(oauthClients({})).toEqual([
-      { clientId: 'rgstr-cli', scope: 'registry:read registry:write offline_access' },
+      { clientId: 'rgstr-cli', scope: 'packages:read packages:write org:read offline_access' },
       { clientId: 'benchsdk-cli', scope: 'packages:read packages:write org:read org:admin offline_access' },
     ]);
-    expect(oauthClients({ RGSTR_OAUTH_CLIENT_ID: 'dev-cli' })).toEqual([{ clientId: 'dev-cli', scope: 'registry:read registry:write offline_access' }]);
+    expect(oauthClients({ RGSTR_OAUTH_CLIENT_ID: 'dev-cli' })).toEqual([{ clientId: 'dev-cli', scope: 'packages:read packages:write org:read offline_access' }]);
 
     const asked: string[] = [];
     const fetchImpl = (async (url: string, init?: RequestInit) => {
@@ -159,7 +159,7 @@ describe('login scopes', () => {
       return new Response(JSON.stringify({ access_token: 'at', token_type: 'Bearer', expires_in: 3600, scope: 'packages:read packages:write org:read org:admin offline_access' }));
     }) as unknown as typeof fetch;
     const creds = await deviceLogin({ baseUrl: 'https://rgstr.org', fetchImpl });
-    expect(asked).toEqual(['rgstr-cli registry:read registry:write offline_access', 'benchsdk-cli packages:read packages:write org:read org:admin offline_access']);
+    expect(asked).toEqual(['rgstr-cli packages:read packages:write org:read offline_access', 'benchsdk-cli packages:read packages:write org:read org:admin offline_access']);
     expect(creds).toMatchObject({ clientId: 'benchsdk-cli', scope: 'packages:read packages:write org:read org:admin offline_access', token: 'at' });
   });
 
@@ -170,9 +170,9 @@ describe('login scopes', () => {
       }
       if (url.endsWith('/device/code')) return new Response(JSON.stringify({ device_code: 'd', user_code: 'ABCD', verification_uri: 'https://x', expires_in: 1, interval: 0 }));
       expect((init?.body as URLSearchParams).get('client_id')).toBe('rgstr-cli');
-      return new Response(JSON.stringify({ access_token: 'at', token_type: 'Bearer', expires_in: 3600, scope: 'registry:read registry:write' }));
+      return new Response(JSON.stringify({ access_token: 'at', token_type: 'Bearer', expires_in: 3600, scope: 'packages:read packages:write org:read offline_access' }));
     }) as unknown as typeof fetch;
-    expect(await deviceLogin({ baseUrl: 'https://rgstr.org', fetchImpl: accepting })).toMatchObject({ clientId: 'rgstr-cli', scope: 'registry:read registry:write' });
+    expect(await deviceLogin({ baseUrl: 'https://rgstr.org', fetchImpl: accepting })).toMatchObject({ clientId: 'rgstr-cli', scope: 'packages:read packages:write org:read offline_access' });
 
     const rejecting = (async (url: string) => {
       if (url.endsWith('/.well-known/oauth-protected-resource/api/v1')) {
