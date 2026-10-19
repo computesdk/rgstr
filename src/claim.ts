@@ -1,7 +1,7 @@
-// What `rgstr claim` prints: the README badge first (the proof a coding
-// agent can land with one PR), an agent prompt that does exactly that, and
-// the publish-proof manifest line as the fallback. Everything here is pure
-// or network-only (public package metadata, never credentials) so the
+// What `rgstr claim` prints: the README badge (the only proof — on GitHub in
+// the repository the package declares, or in the README that ships with the
+// package) and an agent prompt that lands it with one PR. Everything here is
+// pure or network-only (public package metadata, never credentials) so the
 // command's output is testable without the API.
 
 import type { Ecosystem } from './project.js';
@@ -11,11 +11,6 @@ import type { Ecosystem } from './project.js';
 export function badgeMarkdown(origin: string, name: string, token: string): string {
   const page = `${origin.replace(/\/+$/, '')}/registry/${name}`;
   return `[![rgstr](${page}/badge.svg?proof=${token})](${page})`;
-}
-
-export function manifestSnippet(origin: string, name: string, token: string, ecosystem: Ecosystem): string {
-  if (ecosystem === 'npm') return `"rgstr": "${token}"`;
-  return `rgstr = "${origin.replace(/\/+$/, '')}/registry/${name}?proof=${token}"`;
 }
 
 /** `git+https://github.com/o/r.git`, `git@github.com:o/r.git`, `github:o/r`,
@@ -108,7 +103,6 @@ export interface ClaimPlan {
   badge: string;
   /** From the API when it sends one; otherwise built here. */
   agentPrompt: string;
-  manifest: string;
   repoUrl: string | null;
 }
 
@@ -140,19 +134,15 @@ export function buildClaimPlan(input: {
 }): ClaimPlan {
   const badge = input.badge || badgeMarkdown(input.origin, input.name, input.token);
   const base = { name: input.name, ecosystem: input.ecosystem, origin: input.origin, badge, repoUrl: input.repoUrl };
-  return {
-    ...base,
-    agentPrompt: input.agentPrompt || agentPrompt(base),
-    manifest: manifestSnippet(input.origin, input.name, input.token, input.ecosystem),
-  };
+  return { ...base, agentPrompt: input.agentPrompt || agentPrompt(base) };
 }
 
 const indent = (text: string, by = '   ') => text.split('\n').map((l) => (l ? by + l : l)).join('\n');
 
 /** The default `rgstr claim` body, in the order a maintainer needs it:
- *  badge → agent prompt → release fallback. */
+ *  badge on GitHub → agent prompt → the same badge in the package README. */
 export function renderClaimPlan(p: ClaimPlan): string {
-  const manifestFile = p.ecosystem === 'npm' ? 'package.json' : 'pyproject.toml, under [project.urls]';
+  const index = p.ecosystem === 'npm' ? 'npm' : 'PyPI';
   return [
     `1. Add this badge to the README of ${describeRepo(p.name, p.ecosystem, p.repoUrl)}:`,
     '',
@@ -164,11 +154,8 @@ export function renderClaimPlan(p: ClaimPlan): string {
     '',
     indent('```\n' + p.agentPrompt + '\n```'),
     '',
-    `3. Or ship it in your next release — add to ${manifestFile}:`,
-    '',
-    indent(p.manifest),
-    '',
-    `   (\`rgstr claim --write\` adds it for you.) Publish, then: rgstr claim --check ${p.name}`,
+    `3. Or put the same badge in the README that ships with the package (\`rgstr claim --here\` in its checkout);`,
+    `   it verifies on the next publish to ${index}. Publish, then: rgstr claim --check ${p.name}`,
   ].join('\n');
 }
 
@@ -180,17 +167,20 @@ export interface ProofSightingLike {
   repoUrl?: string | null;
 }
 
-/** Which proof matched, for `--check`: badge on github.com/o/r,
- *  package.json@1.2.3, README-in-package@1.2.3. Unknown placements the API
- *  may add later fall through to its own words. */
-export function proofKindLabel(o: { sighting?: ProofSightingLike | null; repoUrl?: string | null; detail?: string }): string {
+/** Which proof matched, for `--check`: the README badge on github.com/o/r
+ *  (`repo_readme`) or in the published package (`readme`, name@version on
+ *  npm/PyPI). Unknown placements the API may add later fall through to its
+ *  own words. */
+export function proofKindLabel(o: { name?: string; sighting?: ProofSightingLike | null; repoUrl?: string | null; detail?: string }): string {
   const s = o.sighting ?? {};
   const repo = s.repo ?? s.repoUrl ?? o.repoUrl ?? null;
-  const at = s.version ? `@${s.version}` : '';
-  if (s.placement === 'manifest') return `${s.ecosystem === 'pypi' ? 'pyproject.toml' : 'package.json'}${at}`;
-  if (s.placement === 'readme') return `README-in-package${at}`;
-  if (repo || (s.placement && /badge|github/.test(s.placement))) {
-    return `badge on ${repo ? repo.replace(/^https?:\/\//, '') : 'GitHub'}`;
+  if (s.placement === 'readme') {
+    const index = s.ecosystem === 'pypi' ? 'PyPI' : 'npm';
+    const pkg = `${o.name ?? 'the package'}${s.version ? `@${s.version}` : ''}`;
+    return `README badge in ${pkg} on ${index}`;
   }
-  return o.detail ?? 'proof';
+  if (s.placement === 'repo_readme' || repo || (s.placement && /badge|github/.test(s.placement))) {
+    return `README badge on ${repo ? repo.replace(/^https?:\/\//, '') : 'GitHub'}`;
+  }
+  return o.detail ?? (s.placement ? `${s.placement.replace(/_/g, ' ')} proof` : 'proof');
 }
