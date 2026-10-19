@@ -25,7 +25,7 @@ import { withNpmProof, withPypiProof, type Ecosystem } from './project.js';
 import { chooseTargets, detectPackages, gitCheckout, nextSteps, openBadgePr, planBadge, readmeFor, sameRepo, shortRepo, workspaceGlobs, type GitCheckout, type PackageTarget } from './readme.js';
 import { formatRouteRow, parseRouteSpec, type RouteInput, type RouteRecord } from './routes.js';
 import { applyUse, planUse, projectStatus, unifiedDiff, type UseChange } from './use.js';
-import { buildClaimPlan, fetchRepoUrl, proofKindLabel, renderClaimPlan, type ProofSightingLike } from './claim.js';
+import { buildClaimPlan, fetchRepoUrl, proofKindLabel, renderClaimPlan, repoDirectoryFrom, type ProofSightingLike } from './claim.js';
 import { confirm, isInteractive } from './prompt.js';
 
 const require = createRequire(import.meta.url);
@@ -501,10 +501,11 @@ async function claimOne(
 
   // Inside a git checkout: the README is where the badge goes — if this is
   // the repository the package declares.
-  const { file, exists } = await readmeFor({ ...t, manifest: t.manifest ?? '' }, ctx.checkout.root, ctx.single);
-  const rel = path.relative(ctx.dir, file) || path.basename(file);
   const declared = plan.repoUrl;
   const here = ctx.checkout.remote;
+  const declaredDir = declared && here && sameRepo(declared, here) ? repoDirectoryFrom(declared) : undefined;
+  const { file, exists, where } = await readmeFor({ ...t, manifest: t.manifest ?? '' }, ctx.checkout.root, ctx.single, declaredDir);
+  const rel = path.relative(ctx.dir, file) || path.basename(file);
   if (declared && here && !sameRepo(declared, here)) {
     const registry = ecosystem === 'npm' ? 'npm' : 'PyPI';
     say(`\n${registry} says ${shortRepo(declared)}, this checkout is ${shortRepo(here)} — the badge must land in ${shortRepo(declared)}'s README, so nothing was written here.`);
@@ -522,6 +523,16 @@ async function claimOne(
   }
   if (!declared) {
     say(`\n(${name} declares no repository on ${ecosystem === 'npm' ? 'npm' : 'PyPI'}${here ? `; this checkout is ${shortRepo(here)}` : ''}. Add \`repository\` to the manifest in your next release so rgstr knows where to look.)`);
+  }
+
+  if (where === 'root') {
+    const manifestRel = path.relative(ctx.checkout.root, t.manifest ?? t.dir).split(path.sep).join('/');
+    const pkgDir = path.relative(ctx.checkout.root, t.dir).split(path.sep).join('/');
+    say(
+      `\n${ecosystem === 'npm' ? 'npm' : 'PyPI'} says ${shortRepo(declared!)} with no directory, so rgstr reads the repository's root README — the badge goes in ${rel}, not next to ${manifestRel}. To keep it with the package, declare ${ecosystem === 'npm' ? `"repository": { "url": ..., "directory": "${pkgDir}" }` : `the /tree/HEAD/${pkgDir} URL`} in your next release.`,
+    );
+  } else if (where === 'declared') {
+    say(`\n${ecosystem === 'npm' ? 'npm' : 'PyPI'} says ${shortRepo(declared!)}, so the badge goes in that folder's README (${rel}).`);
   }
 
   const source = exists ? await fs.readFile(file, 'utf8') : null;

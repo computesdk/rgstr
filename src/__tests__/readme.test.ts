@@ -42,12 +42,31 @@ describe('README detection', () => {
   it('falls back to the repo root README for a single package in a subdirectory', async () => {
     const root = await tmp({ 'README.md': '# mono', 'packages/a/package.json': '{"name":"a"}' });
     const a = { name: 'a', ecosystem: 'npm' as const, manifest: path.join(root, 'packages/a/package.json'), dir: path.join(root, 'packages/a') };
-    expect(await readmeFor(a, root, true)).toEqual({ file: path.join(root, 'README.md'), exists: true });
-    expect(await readmeFor(a, root, false)).toEqual({ file: path.join(root, 'packages/a/README.md'), exists: false });
+    expect(await readmeFor(a, root, true)).toEqual({ file: path.join(root, 'README.md'), exists: true, where: 'fallback' });
+    expect(await readmeFor(a, root, false)).toEqual({ file: path.join(root, 'packages/a/README.md'), exists: false, where: 'own' });
     await fs.writeFile(path.join(root, 'packages/a/readme.md'), '# a');
-    expect(await readmeFor(a, root, true)).toEqual({ file: path.join(root, 'packages/a/readme.md'), exists: true });
+    expect(await readmeFor(a, root, true)).toEqual({ file: path.join(root, 'packages/a/readme.md'), exists: true, where: 'own' });
   });
 });
+
+  it('puts the badge where the declared repository points, not next to the manifest', async () => {
+    const root = await tmp({ 'README.md': '# mono', 'packages/a/package.json': '{"name":"a"}', 'packages/a/README.md': '# a', 'packages/b/package.json': '{"name":"b"}' });
+    const a = { name: 'a', ecosystem: 'npm' as const, manifest: path.join(root, 'packages/a/package.json'), dir: path.join(root, 'packages/a') };
+    const b = { name: 'b', ecosystem: 'npm' as const, manifest: path.join(root, 'packages/b/package.json'), dir: path.join(root, 'packages/b') };
+    // npm says the repo root (no `repository.directory`): rgstr reads the root README, so the badge goes there.
+    expect(await readmeFor(a, root, true, null)).toEqual({ file: path.join(root, 'README.md'), exists: true, where: 'root' });
+    expect(await readmeFor(a, root, false, null)).toEqual({ file: path.join(root, 'README.md'), exists: true, where: 'root' });
+    // npm says this folder: its own README (created if missing).
+    expect(await readmeFor(a, root, false, 'packages/a')).toEqual({ file: path.join(root, 'packages/a/README.md'), exists: true, where: 'own' });
+    expect(await readmeFor(b, root, false, './packages/b/')).toEqual({ file: path.join(root, 'packages/b/README.md'), exists: false, where: 'own' });
+    // npm says a different folder: that folder's README.
+    expect(await readmeFor(b, root, false, 'packages/a')).toEqual({ file: path.join(root, 'packages/a/README.md'), exists: true, where: 'declared' });
+    // a package at the repo root with no directory hint: its own README.
+    const r = { name: 'r', ecosystem: 'npm' as const, manifest: path.join(root, 'package.json'), dir: root };
+    expect(await readmeFor(r, root, true, null)).toEqual({ file: path.join(root, 'README.md'), exists: true, where: 'own' });
+    // no declared repository at all: the old own → root fallback.
+    expect(await readmeFor(b, root, true)).toEqual({ file: path.join(root, 'README.md'), exists: true, where: 'fallback' });
+  });
 
 describe('package detection', () => {
   it('reads setup.cfg names', () => {

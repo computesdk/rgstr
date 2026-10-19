@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { agentPrompt, badgeMarkdown, buildClaimPlan, fetchRepoUrl, manifestSnippet, proofKindLabel, renderClaimPlan, repoUrlFrom } from '../claim.js';
+import { agentPrompt, badgeMarkdown, buildClaimPlan, fetchRepoUrl, manifestSnippet, proofKindLabel, renderClaimPlan, repoDirectoryFrom, repoUrlFrom } from '../claim.js';
 
 const ORIGIN = 'https://rgstr.org';
 const TOKEN = 'rgstr_abcdefghijklmnopqrst';
@@ -98,5 +98,24 @@ describe('--check proof kinds', () => {
     expect(proofKindLabel({ sighting: { placement: 'github_readme' } })).toBe('badge on GitHub');
     expect(proofKindLabel({ repoUrl: 'https://github.com/o/r', detail: 'x' })).toBe('badge on o/r'.replace('o/r', 'github.com/o/r'));
     expect(proofKindLabel({ sighting: { placement: 'something_new' }, detail: 'the server said so' })).toBe('the server said so');
+  });
+});
+
+describe('repoDirectoryFrom', () => {
+  it('reads the monorepo folder from npm metadata, /tree/ URLs and the rgstr API shape', () => {
+    expect(repoDirectoryFrom({ url: 'git+https://github.com/o/r.git', directory: 'packages/x' })).toBe('packages/x');
+    expect(repoDirectoryFrom({ url: 'https://github.com/o/r', directory: './packages/x/' })).toBe('packages/x');
+    expect(repoDirectoryFrom('https://github.com/o/r/tree/main/packages/x')).toBe('packages/x');
+    expect(repoDirectoryFrom('https://github.com/o/r/packages/x')).toBe('packages/x');
+    expect(repoDirectoryFrom('https://github.com/o/r')).toBeNull();
+    expect(repoDirectoryFrom('https://github.com/o/r.git')).toBeNull();
+    expect(repoDirectoryFrom('https://github.com/o/r/issues')).toBeNull();
+    expect(repoDirectoryFrom('git@github.com:o/r.git')).toBeNull();
+    expect(repoDirectoryFrom(null)).toBeNull();
+  });
+
+  it('fetchRepoUrl keeps npm\'s repository.directory as a /tree/HEAD/ URL', async () => {
+    const fetchImpl = (async () => new Response(JSON.stringify({ repository: { type: 'git', url: 'git+https://github.com/o/r.git', directory: 'packages/x' } }), { status: 200 })) as unknown as typeof fetch;
+    expect(await fetchRepoUrl(ORIGIN, 'x', 'npm', fetchImpl)).toBe('https://github.com/o/r/tree/HEAD/packages/x');
   });
 });
