@@ -58,11 +58,13 @@ jobs:
           # long-lived NPM_TOKEN. --provenance signs the attestation.
           # TODO: once every package has a trusted publisher configured, remove
           # NPM_TOKEN entirely.
-          # --provenance needs a public repo (Sigstore rejects private source);
-          # the flag switches on by itself once computesdk/rgstr is public.
-          publish: pnpm changeset publish ${{ github.event.repository.visibility == 'public' && '--provenance' || '' }}
+          # `changeset publish` takes no --provenance flag; npm reads it from
+          # NPM_CONFIG_PROVENANCE below. Provenance needs a public repo
+          # (Sigstore rejects private source), so it is gated on visibility.
+          publish: pnpm changeset publish
           title: "Version Packages"
           commit: "Version Packages"
         env:
           GITHUB_TOKEN: ${{ secrets.CHANGESET_TOKEN || secrets.GITHUB_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: ${{ github.event.repository.visibility == 'public' && 'true' || 'false' }}
