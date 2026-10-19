@@ -91,9 +91,10 @@ export function describeRepo(name: string, ecosystem: Ecosystem, repoUrl: string
 export function agentPrompt(p: Pick<ClaimPlan, 'name' | 'ecosystem' | 'badge' | 'repoUrl'>): string {
   const repo = p.repoUrl ? `the repository ${p.repoUrl}` : `the GitHub repository that publishes ${p.name}`;
   return (
-    `In ${repo}, add this line near the top of README.md (right under the first heading), open a pull request containing only that change, and merge it: ` +
+    `In a checkout of ${repo}, run \`npx @rgstr/cli claim --yes --pr ${p.name}\`: it adds this line to README.md right under the first heading and opens a pull request with only that change: ` +
     `${p.badge} ` +
-    `Do not change anything else and do not publish a release. ` +
+    `If the command is not available, add the line yourself and open a pull request containing only that change. ` +
+    `Merge it; do not change anything else and do not publish a release. ` +
     `Once it is merged, run \`npx @rgstr/cli claim --check ${p.name}\`; rgstr reads the badge from the repository's README on GitHub and verifies the claim.`
   );
 }

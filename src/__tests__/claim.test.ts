@@ -24,7 +24,7 @@ describe('claim output', () => {
     expect(promptAt).toBeLessThan(releaseAt);
     expect(out).toContain('Add this badge to the README of https://github.com/pingdotgg/ts-rust (the repository tsc-rs declares on npm)');
     expect(out).toContain('Merge it, then run: rgstr claim --check tsc-rs');
-    expect(out).toContain('```\n   In the repository https://github.com/pingdotgg/ts-rust, add this line');
+    expect(out).toContain('```\n   In a checkout of the repository https://github.com/pingdotgg/ts-rust, run `npx @rgstr/cli claim --yes --pr tsc-rs`');
     expect(out).toContain(`"rgstr": "${TOKEN}"`);
     expect(out).toContain('`rgstr claim --write` adds it for you');
   });
@@ -40,8 +40,9 @@ describe('claim output', () => {
     const prompt = agentPrompt({ name: 'tsc-rs', ecosystem: 'npm', badge: BADGE, repoUrl: 'https://github.com/pingdotgg/ts-rust' });
     expect(prompt.split('\n')).toHaveLength(1);
     expect(prompt).toContain(BADGE);
+    expect(prompt).toContain('npx @rgstr/cli claim --yes --pr tsc-rs');
     expect(prompt).toContain('open a pull request');
-    expect(prompt).toContain('merge it');
+    expect(prompt).toMatch(/merge it/i);
     expect(prompt).toContain('npx @rgstr/cli claim --check tsc-rs');
     expect(prompt).toContain('do not publish a release');
   });
