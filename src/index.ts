@@ -519,7 +519,7 @@ async function claimOne(
   };
   let claim: ClaimResponse;
   let alreadyPending = false;
-  say(`Claiming ${name} as ${c.auth.org ?? 'the organization your API key belongs to'}`);
+  say(`Claiming ${name} as ${c.auth.org ?? (c.auth.kind === 'api_key' ? 'the organization your API key belongs to' : 'your organization (pick one with `rgstr org use <slug>`)')}`);
   try {
     claim = await c.post<ClaimResponse>('/api/v1/registry/claims', { name, statement: opts.statement });
   } catch (err) {
