@@ -25,7 +25,7 @@ import { withNpmProof, withPypiProof, type Ecosystem } from './project.js';
 import { chooseTargets, detectPackages, gitCheckout, nextSteps, openBadgePr, planBadge, readmeFor, sameRepo, shortRepo, workspaceGlobs, type GitCheckout, type PackageTarget } from './readme.js';
 import { formatRouteRow, parseRouteSpec, type RouteInput, type RouteRecord } from './routes.js';
 import { applyUse, planUse, projectStatus, unifiedDiff, type UseChange } from './use.js';
-import { buildClaimPlan, fetchRepoUrl, proofKindLabel, renderClaimPlan, type ProofSightingLike } from './claim.js';
+import { buildClaimPlan, fetchRepoUrl, proofKindLabel, renderClaimPlan, repoDirectoryFrom, type ProofSightingLike } from './claim.js';
 import { confirm, isInteractive } from './prompt.js';
 
 const require = createRequire(import.meta.url);
@@ -350,6 +350,7 @@ type ClaimOpts = {
   yes?: boolean;
   pr?: boolean;
   all?: boolean;
+  here?: boolean;
   npm?: boolean;
   pip?: boolean;
   statement?: string;
@@ -387,7 +388,7 @@ async function checkOne(c: Awaited<ReturnType<typeof client>>, g: ReturnType<typ
   const o = res.outcome;
   if (o.kind === 'verified') {
     console.log(`${name}: verified via ${proofKindLabel(o)} — ${o.detail}`);
-    console.log(o.autoApproved ? `Approved: your org now holds ${name}.` : `Proof recorded; ${o.reviewReason ?? 'held by someone else'} → a reviewer decides.`);
+    console.log(o.autoApproved ? `Approved: your org now holds ${name}.` : `Proof verified and attached to your application; ${o.reviewReason ?? 'an rgstr reviewer decides'}.`);
   } else if (o.kind === 'not_found') {
     const repo = o.repoUrl ?? pending.repoUrl ?? null;
     const where = [o.checked.length ? o.checked.join(', ') : 'npm, PyPI', repo ? `the README of ${repo}` : null].filter(Boolean).join(' and ');
@@ -501,10 +502,11 @@ async function claimOne(
 
   // Inside a git checkout: the README is where the badge goes — if this is
   // the repository the package declares.
-  const { file, exists } = await readmeFor({ ...t, manifest: t.manifest ?? '' }, ctx.checkout.root, ctx.single);
-  const rel = path.relative(ctx.dir, file) || path.basename(file);
   const declared = plan.repoUrl;
   const here = ctx.checkout.remote;
+  const declaredDir = !opts.here && declared && here && sameRepo(declared, here) ? repoDirectoryFrom(declared) : undefined;
+  const { file, exists, where } = await readmeFor({ ...t, manifest: t.manifest ?? '' }, ctx.checkout.root, opts.here ? false : ctx.single, declaredDir);
+  const rel = path.relative(ctx.dir, file) || path.basename(file);
   if (declared && here && !sameRepo(declared, here)) {
     const registry = ecosystem === 'npm' ? 'npm' : 'PyPI';
     say(`\n${registry} says ${shortRepo(declared)}, this checkout is ${shortRepo(here)} — the badge must land in ${shortRepo(declared)}'s README, so nothing was written here.`);
@@ -522,6 +524,18 @@ async function claimOne(
   }
   if (!declared) {
     say(`\n(${name} declares no repository on ${ecosystem === 'npm' ? 'npm' : 'PyPI'}${here ? `; this checkout is ${shortRepo(here)}` : ''}. Add \`repository\` to the manifest in your next release so rgstr knows where to look.)`);
+  }
+
+  if (opts.here && declared && repoDirectoryFrom(declared) === null && path.resolve(ctx.checkout.root) !== path.resolve(t.dir)) {
+    say(`\n--here: the badge stays in ${rel}. rgstr reads the repository's root README on GitHub, not this one, so the claim verifies when this README ships in your next ${ecosystem === 'npm' ? 'npm' : 'PyPI'} release (rgstr claim --check ${name} after publishing).`);
+  } else if (where === 'root') {
+    const manifestRel = path.relative(ctx.checkout.root, t.manifest ?? t.dir).split(path.sep).join('/');
+    const pkgDir = path.relative(ctx.checkout.root, t.dir).split(path.sep).join('/');
+    say(
+      `\n${ecosystem === 'npm' ? 'npm' : 'PyPI'} says ${shortRepo(declared!)} with no directory, so rgstr reads the repository's root README — the badge goes in ${rel}, not next to ${manifestRel}. To keep it with the package, declare ${ecosystem === 'npm' ? `"repository": { "url": ..., "directory": "${pkgDir}" }` : `the /tree/HEAD/${pkgDir} URL`} in your next release.`,
+    );
+  } else if (where === 'declared') {
+    say(`\n${ecosystem === 'npm' ? 'npm' : 'PyPI'} says ${shortRepo(declared!)}, so the badge goes in that folder's README (${rel}).`);
   }
 
   const source = exists ? await fs.readFile(file, 'utf8') : null;
@@ -564,6 +578,7 @@ program
   .option('-y, --yes', 'write the badge without asking (the diff is still shown)')
   .option('--pr', 'after writing: branch rgstr-badge-<name>, commit, push, open the pull request with gh')
   .option('--all', 'at a workspace root (pnpm/npm/yarn workspaces, uv): claim every member package; without it the root only lists them')
+  .option('--here', "keep the badge in this package's own README even when the registry points at the repository root — it then verifies on the next publish (the badge ships in the package README) rather than on merge")
   .option('--write', 'also write the publish-proof token into package.json / pyproject.toml here (shows the diff first)')
   .addOption(new Option('--manifest', 'same as --write').hideHelp())
   .addOption(new Option('--badge', 'same as --yes').hideHelp())

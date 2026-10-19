@@ -196,16 +196,44 @@ async function isPrivateNpm(p: DetectedPackage): Promise<boolean> {
   }
 }
 
-/** Where to put the badge for a package: its own README, else (single
- *  package) the repo root's, else a new README.md next to the manifest. */
-export async function readmeFor(target: PackageTarget, repoRoot: string | null, single: boolean): Promise<{ file: string; exists: boolean }> {
-  const own = await findReadmeIn(target.dir);
-  if (own) return { file: own, exists: true };
-  if (single && repoRoot && path.resolve(repoRoot) !== path.resolve(target.dir)) {
-    const root = await findReadmeIn(repoRoot);
-    if (root) return { file: root, exists: true };
+export interface ReadmeChoice {
+  file: string;
+  exists: boolean;
+  /** Why this README: the package's own, the repo root because the declared
+   *  repository has no directory hint (rgstr reads the root README), the
+   *  folder the package declares, or the single-package fallback. */
+  where: 'own' | 'root' | 'declared' | 'fallback';
+}
+
+const relDir = (root: string, dir: string) => path.relative(root, dir).split(path.sep).filter(Boolean).join('/');
+
+/** Where to put the badge for a package — where rgstr will read it. With a
+ *  declared repository (`declared`: its directory hint, `null` for the root)
+ *  that is the README of that folder, so a monorepo package whose manifest
+ *  does not say `repository.directory` gets the repo-root README, not its own.
+ *  Without one (`undefined`): its own README, else (single package) the repo
+ *  root's, else a new README.md next to the manifest. */
+export async function readmeFor(target: PackageTarget, repoRoot: string | null, single: boolean, declared?: string | null): Promise<ReadmeChoice> {
+  // Registry metadata is untrusted: a declared directory that climbs out of
+  // the checkout (`..`, absolute) is ignored, never resolved.
+  const parts = declared ? declared.replace(/^\.?\//, '').replace(/\/+$/, '').split('/').filter(Boolean) : [];
+  if (declared && (path.isAbsolute(declared) || parts.some((p) => p === '..'))) declared = undefined;
+  if (declared !== undefined && repoRoot) {
+    const want = parts.join('/');
+    const here = relDir(repoRoot, target.dir);
+    if (want !== here) {
+      const dir = path.join(repoRoot, ...parts);
+      const found = await findReadmeIn(dir);
+      return { file: found ?? path.join(dir, 'README.md'), exists: !!found, where: want ? 'declared' : 'root' };
+    }
   }
-  return { file: path.join(target.dir, 'README.md'), exists: false };
+  const own = await findReadmeIn(target.dir);
+  if (own) return { file: own, exists: true, where: 'own' };
+  if (declared === undefined && single && repoRoot && path.resolve(repoRoot) !== path.resolve(target.dir)) {
+    const root = await findReadmeIn(repoRoot);
+    if (root) return { file: root, exists: true, where: 'fallback' };
+  }
+  return { file: path.join(target.dir, 'README.md'), exists: false, where: 'own' };
 }
 
 export interface GitCheckout {

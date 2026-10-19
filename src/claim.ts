@@ -43,6 +43,31 @@ export function repoUrlFrom(raw: unknown): string | null {
   return `https://${url.hostname}/${parts[0]}/${repo}`;
 }
 
+const GITHUB_ROUTES = new Set(['tree', 'blob', 'issues', 'pull', 'pulls', 'commits', 'commit', 'releases', 'wiki', 'actions', 'discussions', 'tags', 'branches']);
+
+/** The folder inside the repository the package declares: npm's
+ *  `repository.directory`, a `/tree/<ref>/<dir>` URL, or the `/dir` the rgstr
+ *  API appends to `repoUrl` for monorepo packages. `null` when the package
+ *  points at the repository root (or declares none). */
+export function repoDirectoryFrom(raw: unknown): string | null {
+  if (raw && typeof raw === 'object' && typeof (raw as { directory?: unknown }).directory === 'string') {
+    const dir = (raw as { directory: string }).directory.trim().replace(/^\.?\//, '').replace(/\/+$/, '');
+    return dir || null;
+  }
+  const value = typeof raw === 'string' ? raw : raw && typeof raw === 'object' ? (raw as { url?: unknown }).url : null;
+  if (typeof value !== 'string') return null;
+  let url: URL;
+  try {
+    url = new URL(value.trim().replace(/^git\+/, ''));
+  } catch {
+    return null;
+  }
+  const parts = url.pathname.split('/').filter(Boolean);
+  if (parts.length < 3) return null;
+  const rest = parts[2] === 'tree' ? parts.slice(4) : GITHUB_ROUTES.has(parts[2]) ? [] : parts.slice(2);
+  return rest.length ? rest.join('/') : null;
+}
+
 /** Where the package says its source lives, from public registry metadata:
  *  npm's packument via the rgstr proxy, PyPI's JSON API. No credentials, and
  *  redirects are not followed (a 3xx is "no answer"), so a server cannot
@@ -58,14 +83,19 @@ export async function fetchRepoUrl(
       const res = await fetchImpl(`${origin}/api/registry/${encodeURIComponent(name)}`, { headers: { accept: 'application/json' }, redirect: 'manual' });
       if (!res.ok) return null;
       const doc = (await res.json()) as { repository?: unknown; homepage?: unknown };
-      return repoUrlFrom(doc.repository) ?? (typeof doc.homepage === 'string' && /github\.com/.test(doc.homepage) ? repoUrlFrom(doc.homepage) : null);
+      const url = repoUrlFrom(doc.repository) ?? (typeof doc.homepage === 'string' && /github\.com/.test(doc.homepage) ? repoUrlFrom(doc.homepage) : null);
+      const dir = url && repoUrlFrom(doc.repository) ? repoDirectoryFrom(doc.repository) : null;
+      return url && dir ? `${url}/tree/HEAD/${dir}` : url;
     }
     const res = await fetchImpl(`https://pypi.org/pypi/${encodeURIComponent(name)}/json`, { headers: { accept: 'application/json' }, redirect: 'manual' });
     if (!res.ok) return null;
     const doc = (await res.json()) as { info?: { project_urls?: Record<string, string> | null; home_page?: string | null } };
     const urls = Object.values(doc.info?.project_urls ?? {});
     const github = urls.find((u) => /github\.com/.test(u)) ?? (doc.info?.home_page && /github\.com/.test(doc.info.home_page) ? doc.info.home_page : undefined);
-    return repoUrlFrom(github ?? urls[0] ?? null);
+    const src = github ?? urls[0] ?? null;
+    const url = repoUrlFrom(src);
+    const dir = url ? repoDirectoryFrom(src) : null;
+    return url && dir ? `${url}/tree/HEAD/${dir}` : url;
   } catch {
     return null;
   }
