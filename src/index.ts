@@ -519,6 +519,7 @@ async function claimOne(
   };
   let claim: ClaimResponse;
   let alreadyPending = false;
+  say(`Claiming ${name} as ${c.auth.org ?? 'the org your API key belongs to'}`);
   try {
     claim = await c.post<ClaimResponse>('/api/v1/registry/claims', { name, statement: opts.statement });
   } catch (err) {
@@ -547,7 +548,7 @@ async function claimOne(
     ? buildClaimPlan({ name, ecosystem, origin, token: claim.proof.token, repoUrl, badge: claim.badgeMarkdown ?? claim.proof.badge, agentPrompt: claim.agentPrompt })
     : null;
 
-  say(alreadyPending ? `${name}: already under review for ${c.auth.org ?? 'your org'} (${claim.request.id.slice(0, 8)}).` : `Filed: ${name} for ${c.auth.org ?? 'your org'} (${claim.url})`);
+  say(alreadyPending ? `${name}: already under review (${claim.request.id.slice(0, 8)}).` : `Filed: ${name} (${claim.url})`);
   if (claim.dispute) say(`Held by ${claim.dispute.holder} via ${claim.dispute.via} — this is a dispute; a reviewer decides.`);
 
   const out: ClaimOutcome = { name, ecosystem, claim, alreadyPending, repoUrl, plan, readme: null };
@@ -718,6 +719,7 @@ program
         const toJson = (r: ClaimOutcome) => ({
           name: r.name,
           ecosystem: r.ecosystem,
+          org: c.auth.org,
           ...r.claim,
           alreadyPending: r.alreadyPending,
           repoUrl: r.repoUrl,
