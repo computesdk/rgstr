@@ -22,7 +22,7 @@ import {
 } from './client.js';
 import { fmtDownloads, kv, printJson, table } from './output.js';
 import { withNpmProof, withPypiProof, type Ecosystem } from './project.js';
-import { detectPackages, gitCheckout, nextSteps, openBadgePr, planBadge, readmeFor, sameRepo, shortRepo, type GitCheckout, type PackageTarget } from './readme.js';
+import { chooseTargets, detectPackages, gitCheckout, nextSteps, openBadgePr, planBadge, readmeFor, sameRepo, shortRepo, workspaceGlobs, type GitCheckout, type PackageTarget } from './readme.js';
 import { formatRouteRow, parseRouteSpec, type RouteInput, type RouteRecord } from './routes.js';
 import { applyUse, planUse, projectStatus, unifiedDiff, type UseChange } from './use.js';
 import { buildClaimPlan, fetchRepoUrl, proofKindLabel, renderClaimPlan, type ProofSightingLike } from './claim.js';
@@ -562,7 +562,7 @@ program
   .option('--check', 'look for the proof: the badge in the repo README on GitHub, or the token in a published release')
   .option('-y, --yes', 'write the badge without asking (the diff is still shown)')
   .option('--pr', 'after writing: branch rgstr-badge-<name>, commit, push, open the pull request with gh')
-  .option('--all', 'every package in this workspace (pnpm/npm/yarn workspaces, uv), not just the one here')
+  .option('--all', 'at a workspace root (pnpm/npm/yarn workspaces, uv): claim every member package; without it the root only lists them')
   .option('--write', 'also write the publish-proof token into package.json / pyproject.toml here (shows the diff first)')
   .addOption(new Option('--manifest', 'same as --write').hideHelp())
   .addOption(new Option('--badge', 'same as --yes').hideHelp())
@@ -575,13 +575,19 @@ program
       const dir = process.cwd();
       const prefer: Ecosystem | undefined = opts.pip ? 'pypi' : opts.npm ? 'npm' : undefined;
       const found = await detectPackages(dir, { prefer, all: opts.all });
-      let targets: ClaimTarget[];
-      if (nameArg) {
-        targets = [found.find((t) => t.name === nameArg) ?? { name: nameArg, ecosystem: prefer ?? 'npm', dir, manifest: null }];
-      } else if (found.length === 0) {
+      const workspaceRoot = (await workspaceGlobs(dir)).length > 0;
+      const choice = chooseTargets(found, workspaceRoot, { name: nameArg, all: opts.all });
+      if (choice.kind === 'workspace') {
+        const list = choice.names.join(', ');
+        if (g.json) printJson({ workspace: true, packages: choice.names, hint: 'pass --all to claim them all, or a name' });
+        else if (choice.names.length === 0) console.log('This is a workspace root with no publishable packages — cd into a package, or pass the name: rgstr claim <name>');
+        else console.log(`${choice.names.length} package${choice.names.length === 1 ? '' : 's'} in this workspace: ${list} — re-run with --all to claim them all, or cd into one. Nothing filed, nothing written.`);
+        return;
+      }
+      let targets: ClaimTarget[] = choice.targets;
+      if (nameArg && targets.length === 0) targets = [{ name: nameArg, ecosystem: prefer ?? 'npm', dir, manifest: null }];
+      if (targets.length === 0) {
         throw new RgstrCliError('invalid_argument', 'No package.json / pyproject.toml / setup.cfg here — pass the name: rgstr claim <name>');
-      } else {
-        targets = found;
       }
       const c = await client();
 

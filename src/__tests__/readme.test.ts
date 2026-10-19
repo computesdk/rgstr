@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  chooseTargets,
   detectPackages,
   existingBadge,
   expandGlobs,
@@ -77,6 +78,17 @@ describe('package detection', () => {
     const found = await detectPackages(root);
     expect(found.map((t) => `${t.ecosystem}:${t.name}`)).toEqual(['npm:@acme/a', 'npm:@acme/b', 'pypi:acme-lib', 'pypi:acme-old', 'npm:acme-cli']);
     expect(found[0]).toMatchObject({ version: '1.0.0', dir: path.join(root, 'packages/a') });
+  });
+
+  it('never claims a whole workspace implicitly', () => {
+    const a = { name: '@acme/a', ecosystem: 'npm' as const, manifest: '/m/packages/a/package.json', dir: '/m/packages/a' };
+    const b = { name: '@acme/b', ecosystem: 'npm' as const, manifest: '/m/packages/b/package.json', dir: '/m/packages/b' };
+    expect(chooseTargets([a, b], true, {})).toEqual({ kind: 'workspace', names: ['@acme/a', '@acme/b'] });
+    expect(chooseTargets([a, b], true, { all: true })).toEqual({ kind: 'targets', targets: [a, b] });
+    expect(chooseTargets([a, b], true, { name: '@acme/b' })).toEqual({ kind: 'targets', targets: [b] });
+    expect(chooseTargets([a, b], true, { name: 'other' })).toEqual({ kind: 'targets', targets: [] });
+    expect(chooseTargets([a], false, {})).toEqual({ kind: 'targets', targets: [a] });
+    expect(chooseTargets([], true, {})).toEqual({ kind: 'workspace', names: [] });
   });
 
   it('is just the one package outside a workspace', async () => {

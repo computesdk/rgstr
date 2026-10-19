@@ -171,6 +171,22 @@ export async function detectPackages(dir: string, opts: { prefer?: Ecosystem; al
   return targets;
 }
 
+export type TargetChoice =
+  | { kind: 'targets'; targets: PackageTarget[] }
+  /** A workspace root without --all: list the members, claim nothing. */
+  | { kind: 'workspace'; names: string[] };
+
+/** Which packages `rgstr claim` acts on. Filing N claims and touching N
+ *  READMEs is never implicit: a workspace root needs --all or a name. */
+export function chooseTargets(found: PackageTarget[], workspaceRoot: boolean, opts: { name?: string; all?: boolean }): TargetChoice {
+  if (opts.name) {
+    const match = found.find((t) => t.name === opts.name);
+    return { kind: 'targets', targets: match ? [match] : [] };
+  }
+  if (workspaceRoot && !opts.all) return { kind: 'workspace', names: found.map((t) => t.name) };
+  return { kind: 'targets', targets: found };
+}
+
 async function isPrivateNpm(p: DetectedPackage): Promise<boolean> {
   if (p.ecosystem !== 'npm') return false;
   try {
