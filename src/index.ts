@@ -366,24 +366,24 @@ async function writeShown(dir: string, file: string, current: string | null, nex
   return rel;
 }
 
-async function checkOne(c: Awaited<ReturnType<typeof client>>, g: ReturnType<typeof globals>, t: ClaimTarget): Promise<void> {
+/** One package's `--check`. Prints the human lines; returns the JSON shape
+ *  so a workspace run can emit a single document. */
+async function checkOne(c: Awaited<ReturnType<typeof client>>, g: ReturnType<typeof globals>, t: ClaimTarget): Promise<Record<string, unknown>> {
   const { name } = t;
   const list = await c.get<ClaimsList>('/api/v1/registry/claims');
   const pending = list.pending.find((p) => p.name === name);
   if (!pending) {
     const held = list.held.find((h) => h.name === name);
     const whois = await c.get<WhoisResponse>(`/api/v1/registry/whois/${encodeURIComponent(name)}`);
-    if (g.json) printJson({ name, checked: false, held: held ?? null, whois });
-    else if (held?.status === 'verified') console.log(`${name}: verified — your org holds it. ${whois.url}`);
+    if (g.json) return { name, checked: false, held: held ?? null, whois };
+    if (held?.status === 'verified') console.log(`${name}: verified — your org holds it. ${whois.url}`);
     else if (whois.holder) console.log(`${name}: held by ${whois.holder.name} (${whois.holder.slug}) — file a claim with \`rgstr claim\` to dispute it.`);
     else console.log(`${name}: no application from your org yet — run \`rgstr claim ${name}\` first.`);
-    return;
+    return { name, checked: false, held: held ?? null, whois };
   }
   const res = await c.post<{ outcome: ProofOutcome; request: ClaimsList['pending'][number] }>(`/api/v1/registry/claims/${pending.id}/check-proof`);
-  if (g.json) {
-    printJson({ name, ...res, ...(res.outcome.kind === 'verified' ? { proofKind: proofKindLabel(res.outcome) } : {}) });
-    return;
-  }
+  const result = { name, ...res, ...(res.outcome.kind === 'verified' ? { proofKind: proofKindLabel(res.outcome) } : {}) };
+  if (g.json) return result;
   const o = res.outcome;
   if (o.kind === 'verified') {
     console.log(`${name}: verified via ${proofKindLabel(o)} — ${o.detail}`);
@@ -395,6 +395,7 @@ async function checkOne(c: Awaited<ReturnType<typeof client>>, g: ReturnType<typ
     if (o.failed.length) console.log(`Could not reach: ${o.failed.join(', ')}.`);
     console.log(`Add the badge to the repository README and merge it (\`rgstr claim ${name}\` prints it), or publish a release carrying the token, then run \`rgstr claim --check ${name}\` again.`);
   } else console.log(`${name}: check failed — ${o.message}`);
+  return result;
 }
 
 interface ReadmeOutcome {
@@ -594,7 +595,9 @@ program
       const c = await client();
 
       if (opts.check) {
-        for (const t of targets) await checkOne(c, g, t);
+        const checks: Record<string, unknown>[] = [];
+        for (const t of targets) checks.push(await checkOne(c, g, t));
+        if (g.json) printJson(checks.length === 1 ? checks[0] : { packages: checks });
         return;
       }
 
