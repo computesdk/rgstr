@@ -54,11 +54,7 @@ async function client(optional = false): Promise<RgstrClient> {
 
 // ── auth ──────────────────────────────────────────────────────────────────
 
-program
-  .command('login')
-  .description('sign in with your ComputeSDK account (device code)')
-  .action(async () => {
-    try {
+async function loginFlow(): Promise<void> {
       const opts = globals();
       const baseUrl = await resolveBaseUrl(opts);
       assertHostAllowed(baseUrl, opts.allowUntrustedHost);
@@ -88,6 +84,14 @@ program
           console.log('Pick an org: ' + me.organizations.map((o) => `rgstr org use ${o.slug}`).join(' | '));
         }
       }
+}
+
+program
+  .command('login')
+  .description('sign in with your ComputeSDK account (device code)')
+  .action(async () => {
+    try {
+      await loginFlow();
     } catch (err) {
       fail(err);
     }
@@ -159,15 +163,9 @@ org
 
 // ── use ───────────────────────────────────────────────────────────────────
 
-program
-  .command('use')
-  .description("point this project's installs at rgstr (writes .npmrc / pip config)")
-  .option('--npm', 'JavaScript clients only')
-  .option('--pip', 'Python clients only')
-  .option('--off', 'remove exactly what `rgstr use` wrote')
-  .option('--dry-run', 'show the diff without writing')
-  .action(async (opts: { npm?: boolean; pip?: boolean; off?: boolean; dryRun?: boolean }) => {
-    try {
+type UseOpts = { npm?: boolean; pip?: boolean; off?: boolean; dryRun?: boolean };
+
+async function useFlow(opts: UseOpts): Promise<void> {
       const g = globals();
       const origin = await resolveBaseUrl(g);
       assertHostAllowed(origin, g.allowUntrustedHost);
@@ -191,12 +189,53 @@ program
         }
       }
       if (!opts.off && changes.some((c) => c.action === 'written')) {
-        console.log(`\nInstalls now resolve through ${origin}. Undo with \`rgstr use --off\`.`);
+        console.log(`\nInstalls now resolve through ${origin}. Undo with \`rgstr setup --off\`.`);
       }
-    } catch (err) {
-      fail(err);
+}
+
+function withUseOptions(cmd: Command): Command {
+  return cmd
+    .option('--npm', 'JavaScript clients only')
+    .option('--pip', 'Python clients only')
+    .option('--off', 'remove exactly what setup wrote to this project')
+    .option('--dry-run', 'show the diff without writing');
+}
+
+withUseOptions(
+  program
+    .command('setup')
+    .description('sign in if needed, pick your org, and point this project\'s installs at rgstr (.npmrc / pip config)'),
+).action(async (opts: UseOpts) => {
+  try {
+    if (!opts.off && !opts.dryRun) {
+      let signedIn = false;
+      try {
+        const c = await client();
+        const me = await c.get<MeResponse>('/api/v1/me');
+        signedIn = true;
+        console.log(`Signed in as ${me.user.email}` + (c.auth.org ? ` · org ${c.auth.org}` : ''));
+        if (!c.auth.org && me.organizations.length > 1) {
+          console.log('Pick an org: ' + me.organizations.map((o) => `rgstr org use ${o.slug}`).join(' | '));
+        }
+      } catch {
+        signedIn = false;
+      }
+      if (!signedIn) await loginFlow();
     }
-  });
+    await useFlow(opts);
+  } catch (err) {
+    fail(err);
+  }
+});
+
+// `rgstr use` is what 0.0.1 shipped; kept as a hidden alias of `setup`.
+withUseOptions(program.command('use', { hidden: true })).action(async (opts: UseOpts) => {
+  try {
+    await useFlow(opts);
+  } catch (err) {
+    fail(err);
+  }
+});
 
 // ── claim ─────────────────────────────────────────────────────────────────
 
