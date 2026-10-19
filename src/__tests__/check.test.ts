@@ -14,18 +14,21 @@ describe('reading dependencies', () => {
   it('package.json: dependencies + devDependencies, aliases resolved, non-registry specs skipped', () => {
     const r = parseNpmDependencies(
       JSON.stringify({
-        dependencies: { react: '^19', local: 'file:../x', ws: 'workspace:*', gh: 'github:a/b', url: 'https://x/y.tgz', alias: 'npm:zod@^3', scoped: 'npm:@scope/pkg@1' },
+        dependencies: { react: '^19', local: 'file:../x', ws: 'workspace:*', gh: 'github:a/b', short: 'a/b', shortRef: 'a/b#v1', ssh: 'git@github.com:a/b.git', url: 'https://x/y.tgz', alias: 'npm:zod@^3', scoped: 'npm:@scope/pkg@1', tag: 'latest' },
         devDependencies: { typescript: '^5', react: '^18' },
         peerDependencies: { ignored: '*' },
       }),
     );
-    expect(r.deps.map((d) => d.name)).toEqual(['react', 'zod', '@scope/pkg', 'typescript']);
+    expect(r.deps.map((d) => d.name)).toEqual(['react', 'zod', '@scope/pkg', 'tag', 'typescript']);
     expect(r.deps.every((d) => d.ecosystem === 'npm')).toBe(true);
     expect(r.deps.find((d) => d.name === 'typescript')?.section).toBe('devDependencies');
     expect(r.skipped.map((s) => [s.name, s.spec])).toEqual([
       ['local', 'file:../x'],
       ['ws', 'workspace:*'],
       ['gh', 'github:a/b'],
+      ['short', 'a/b'],
+      ['shortRef', 'a/b#v1'],
+      ['ssh', 'git@github.com:a/b.git'],
       ['url', 'https://x/y.tgz'],
     ]);
   });
@@ -64,6 +67,11 @@ httpx = "^0.27"
 
 [tool.poetry.group.dev.dependencies]
 mypy = "*"
+
+[[tool.poetry.source]]
+name = "private"
+url = "https://pypi.example/simple"
+priority = "supplemental"
 
 [tool.other]
 dependencies = ["not-this"]

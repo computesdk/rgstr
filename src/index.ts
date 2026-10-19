@@ -334,24 +334,33 @@ program
       if (files.length === 0) {
         throw new RgstrCliError('not_configured', 'This project is not pointed at rgstr (no .npmrc / pip config written for it) — run `npx @rgstr/cli setup` first.');
       }
-      // Ask the origin the project's installs actually go to, unless told otherwise.
-      const baseUrl = g.baseUrl || process.env.RGSTR_URL || files[0].origin;
-      const c = new RgstrClient(await resolveAuth({ ...g, baseUrl, optional: true }));
       const read = await readDependencies(dir);
-      // Only the ecosystems this project actually sends through rgstr: a
-      // `.npmrc` alone says nothing about what pip installs.
-      const pointed = new Set<Ecosystem>(files.flatMap((f) => f.clients.map((id) => (id === 'pip' || id === 'uv' || id === 'poetry' ? 'pypi' : 'npm'))));
-      const notPointed = read.deps.filter((d) => !pointed.has(d.ecosystem));
+      // Which ecosystems this project actually sends through rgstr, and to which
+      // origin: a `.npmrc` alone says nothing about pip, and npm and pip may be
+      // pointed at different hosts. Ask the origin each install really goes to.
+      const ecosystemOf = (id: string): Ecosystem => (id === 'pip' || id === 'uv' || id === 'poetry' ? 'pypi' : 'npm');
+      const originFor = new Map<Ecosystem, string>();
+      for (const f of files) for (const id of f.clients) if (!originFor.has(ecosystemOf(id))) originFor.set(ecosystemOf(id), f.origin);
+      const override = g.baseUrl || process.env.RGSTR_URL;
+      const origins = [...new Set(override ? [override] : [...originFor.values()])];
+      const clients = new Map(await Promise.all(origins.map(async (o) => [o, new RgstrClient(await resolveAuth({ ...g, baseUrl: o, optional: true }))] as const)));
+      const clientFor = (d: Dependency) => clients.get(override || originFor.get(d.ecosystem) || origins[0])!;
+      const pointed = read.deps.filter((d) => originFor.has(d.ecosystem));
+      let notPointed = read.deps.filter((d) => !originFor.has(d.ecosystem));
       let deps: Dependency[];
       if (names.length) {
         const only = new Set(names);
-        const known = read.deps.filter((d) => only.has(d.name));
-        const pyOnly = read.files.length > 0 && !read.files.includes('package.json');
-        const missing = names.filter((n) => !known.some((d) => d.name === n)).map((n) => ({ name: n, ecosystem: pyOnly ? ('pypi' as const) : ('npm' as const), source: '(argument)', section: 'argument' }));
+        const known = pointed.filter((d) => only.has(d.name));
+        notPointed = notPointed.filter((d) => only.has(d.name));
+        const guess: Ecosystem = originFor.size === 1 ? [...originFor.keys()][0] : read.files.length > 0 && !read.files.includes('package.json') ? 'pypi' : 'npm';
+        const missing = names
+          .filter((n) => !known.some((d) => d.name === n) && !notPointed.some((d) => d.name === n))
+          .map((n) => ({ name: n, ecosystem: guess, source: '(argument)', section: 'argument' }));
         deps = [...known, ...missing];
-      } else deps = read.deps.filter((d) => pointed.has(d.ecosystem));
+      } else deps = pointed;
 
       const rows: CheckRow[] = await mapLimit(deps, 8, async (d) => {
+        const c = clientFor(d);
         try {
           return checkRow(d, await c.get<WhoisResponse>(`/api/v1/registry/whois/${encodeURIComponent(d.name)}`));
         } catch (err) {
@@ -366,12 +375,13 @@ program
       if (g.json) {
         printJson({
           dir,
-          origin: c.baseUrl,
+          origin: origins.length === 1 ? origins[0] : null,
+          origins: Object.fromEntries([...originFor].map(([eco, o]) => [eco, override || o])),
           files: files.map((f) => f.file),
           manifests: read.files,
           names: rows,
           skipped: names.length ? [] : read.skipped,
-          notPointed: names.length ? [] : notPointed,
+          notPointed,
           held: rows.filter((r) => r.held).length,
           total: rows.length,
           summary,
@@ -382,11 +392,15 @@ program
       if (!names.length && read.skipped.length) {
         notes.push(`(${read.skipped.length} not checked: ${read.skipped.map((s) => `${s.name} is ${s.spec}`).join(', ')} — not fetched from a registry.)`);
       }
-      if (!names.length && notPointed.length) {
+      if (notPointed.length) {
         const py = notPointed[0].ecosystem === 'pypi';
         notes.push(`(${notPointed.length} ${py ? 'PyPI' : 'npm'} name${notPointed.length === 1 ? '' : 's'} not checked: ${py ? 'pip' : 'npm'} installs here do not go through rgstr — \`rgstr setup ${py ? '--pip' : '--npm'}\` to point them at it.)`);
       }
-      console.log(`Installs here resolve through ${c.baseUrl} (${files.map((f) => f.file).join(', ')}).`);
+      console.log(
+        origins.length === 1
+          ? `Installs here resolve through ${origins[0]} (${files.map((f) => f.file).join(', ')}).`
+          : `Installs here resolve through ${files.map((f) => `${f.origin} (${f.file})`).join(' and ')}.`,
+      );
       if (rows.length === 0) {
         console.log(read.files.length ? `No dependencies to check in ${read.files.join(' / ')}.` : 'No package.json, pyproject.toml or requirements.txt here — pass the names: rgstr check <name…>');
         for (const n of notes) console.log(n);

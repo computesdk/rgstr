@@ -50,7 +50,9 @@ export function parseNpmDependencies(json: string, source = 'package.json'): { d
         deps.push({ ...base, name: target || key });
         continue;
       }
-      if (/^(workspace:|file:|link:|portal:|patch:|git\+|git:|github:|gitlab:|bitbucket:|https?:\/\/|ssh:|[^/@]+\/[^/]+#)/.test(spec) || /\.(tgz|tar\.gz)$/.test(spec)) {
+      // Anything that is not a version/range/tag is fetched outside the registry:
+      // protocols, git (incl. `git@…` and the `owner/repo[#ref]` shorthand), tarballs.
+      if (/^(workspace:|file:|link:|portal:|patch:|git\+|git:|git@|github:|gitlab:|bitbucket:|https?:\/\/|ssh:)/.test(spec) || spec.includes('/') || /\.(tgz|tar\.gz)$/.test(spec)) {
         skipped.push({ ...base, name: key, spec });
         continue;
       }
@@ -89,7 +91,8 @@ export function parsePyprojectDependencies(toml: string, source = 'pyproject.tom
   let table = '';
   for (let i = 0; i < lines.length; i++) {
     const t = stripTomlComment(lines[i]).trim();
-    const header = t.match(/^\[([^\]]+)\]$/);
+    // `[table]` and `[[array.of.tables]]` both switch the active table.
+    const header = t.match(/^\[\[?([^\]]+)\]\]?$/);
     if (header) {
       table = header[1].trim();
       continue;
