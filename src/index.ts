@@ -287,10 +287,12 @@ program
       const g = globals();
       const dir = process.cwd();
       const files = await projectStatus(dir);
-      // A stored login that cannot be refreshed right now (offline, server
-      // down) must not hide the local answer.
+      const baseUrl = await resolveBaseUrl(g);
+      assertHostAllowed(baseUrl, g.allowUntrustedHost);
+      // Past the host check, the only thing left to fail is refreshing a stored
+      // login (offline, server down); that must not hide the local answer.
       const auth = await resolveAuth({ ...g, optional: true }).catch(async (err: unknown) => ({
-        baseUrl: await resolveBaseUrl(g),
+        baseUrl,
         token: null,
         kind: 'stale' as const,
         org: g.org || process.env.RGSTR_ORG || (await loadConfig()).org || null,
