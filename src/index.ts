@@ -388,7 +388,7 @@ async function checkOne(c: Awaited<ReturnType<typeof client>>, g: ReturnType<typ
   const o = res.outcome;
   if (o.kind === 'verified') {
     console.log(`${name}: verified via ${proofKindLabel(o)} — ${o.detail}`);
-    console.log(o.autoApproved ? `Approved: your org now holds ${name}.` : `Proof recorded; ${o.reviewReason ?? 'held by someone else'} → a reviewer decides.`);
+    console.log(o.autoApproved ? `Approved: your org now holds ${name}.` : `Proof verified and attached to your application; ${o.reviewReason ?? 'an rgstr reviewer decides'}.`);
   } else if (o.kind === 'not_found') {
     const repo = o.repoUrl ?? pending.repoUrl ?? null;
     const where = [o.checked.length ? o.checked.join(', ') : 'npm, PyPI', repo ? `the README of ${repo}` : null].filter(Boolean).join(' and ');
