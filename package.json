@@ -1,6 +1,6 @@
 {
   "name": "@rgstr/cli",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "rgstr CLI — claim, verify and route package names across npm and PyPI (https://rgstr.org)",
   "author": "computesdk",
   "license": "MIT",
