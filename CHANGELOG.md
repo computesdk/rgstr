@@ -1,5 +1,12 @@
 # @rgstr/cli
 
+## 0.0.7
+
+### Patch Changes
+
+- 9990dab: `rgstr claim` no longer says "your API key" when you are signed in with `rgstr login` and have no organization picked.
+- 8892a85: `rgstr claim` says which org it files for before it files (`Claiming <name> as <org>`), names the org only there, and `--json` carries `org`.
+
 ## 0.0.6
 
 ### Patch Changes
