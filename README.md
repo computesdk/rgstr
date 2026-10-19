@@ -25,6 +25,7 @@ Nothing edits your files unless you ask: `claim` shows the diff and asks
 | `rgstr search <query>` | Names in rgstr's order, with trust and weekly downloads. |
 | `rgstr setup` | Point this project's installs at rgstr: shows the `.npmrc` (and yarn/bun/uv/poetry/pip) diff, asks, writes, then says what changed. `--yes` to skip the question, `--dry-run` to only look, `--off` removes exactly what it wrote. Signs you in first if needed. |
 | `rgstr status` | Is this project pointed at rgstr, through which files, as which org and login. |
+| `rgstr check [name…]` | After `setup`: what resolving this project's dependencies through rgstr does. One line per direct dependency (package.json, pyproject.toml, requirements.txt) with its trust state, holder and where it is served from, then `N of M names are held on rgstr; the rest fall through to npm / PyPI unchanged`. Informational — exit 0 whenever the check ran. |
 | `rgstr route <name> --to npm:other@^1` | Route a name you hold to the package that really ships it. |
 
 Plus `rgstr login` / `logout` / `whoami` (device-code sign-in as the `rgstr-cli`

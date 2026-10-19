@@ -16,7 +16,8 @@ export type RgstrCliErrorCode =
   | 'insecure_transport'
   | 'invalid_argument'
   | 'not_found'
-  | 'not_holder';
+  | 'not_holder'
+  | 'not_configured';
 
 export class RgstrCliError extends Error {
   constructor(
