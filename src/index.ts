@@ -421,7 +421,19 @@ program
 
 interface SearchObject {
   package: { name: string; version?: string; description?: string };
-  rgstr: { trust: string; owner?: { name?: string; slug?: string } | null; tier: string; demotion?: unknown; weeklyDownloads?: number | null };
+  rgstr: {
+    trust: string;
+    owner?: { name?: string; slug?: string } | null;
+    tier: string;
+    demotion?: { kind: 'sibling' | 'namesake' | 'copy'; of: string } | null;
+    weeklyDownloads?: number | null;
+  };
+}
+
+/** Mirrors the website's labels: siblings share the repository, namesakes share the name, copies share the bytes. */
+function relation(d: SearchObject['rgstr']['demotion']): string {
+  if (!d) return '';
+  return `${d.kind} of ${d.of}`;
 }
 
 program
@@ -447,11 +459,14 @@ program
             o.package.version ?? '',
             o.rgstr.trust + (o.rgstr.owner?.slug ? ` (${o.rgstr.owner.slug})` : ''),
             fmtDownloads(o.rgstr.weeklyDownloads),
+            relation(o.rgstr.demotion),
             (o.package.description ?? '').slice(0, 60),
           ]),
-          ['name', 'version', 'trust', 'downloads', 'description'],
+          ['name', 'version', 'trust', 'downloads', 'relation', 'description'],
         ),
       );
+      const demoted = res.objects.filter((o) => o.rgstr.demotion).length;
+      if (demoted > 0) console.log(`\n${demoted} marked as siblings, namesakes or copies of a bigger package (see relation).`);
     } catch (err) {
       fail(err);
     }
