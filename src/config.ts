@@ -13,6 +13,8 @@ export interface Credentials {
   refreshToken?: string;
   tokenExpiresAt?: number;
   clientId: string;
+  /** Scopes the token was granted (registry-only or the platform set). */
+  scope?: string;
   /** Authorization server (…/api/auth) and resource discovered at login. */
   authBaseUrl: string;
   resource: string;
