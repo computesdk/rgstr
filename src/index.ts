@@ -40,7 +40,7 @@ program
   .option('--base-url <url>', 'rgstr origin (default https://rgstr.org; RGSTR_URL)')
   .option('--allow-untrusted-host', 'allow a base URL that is not rgstr.org / computesdk.com / localhost')
   .option('--org <slug>', 'organization slug (RGSTR_ORG, or `rgstr org use`)')
-  .option('--token <token>', 'org API key (RGSTR_TOKEN) instead of a login')
+  .option('--token <token>', 'organization API key (RGSTR_TOKEN) instead of a login')
   .option('--json', 'machine-readable output');
 
 const globals = (): GlobalOptions => program.opts<GlobalOptions>();
@@ -88,9 +88,9 @@ async function loginFlow(): Promise<void> {
       else {
         console.log(`Logged in as ${me.user.email} (${baseUrl})`);
         console.log(`Scopes: ${creds.scope ?? '(not reported)'}` + (platformClient ? ' — the platform-wide client; the registry-only client is not on this server yet' : ''));
-        if (org) console.log(`Active org: ${org}`);
+        if (org) console.log(`Active organization: ${org}`);
         else if (me.organizations.length > 1) {
-          console.log('Pick an org: ' + me.organizations.map((o) => `rgstr org use ${o.slug}`).join(' | '));
+          console.log('Pick an organization: ' + me.organizations.map((o) => `rgstr org use ${o.slug}`).join(' | '));
         }
       }
 }
@@ -123,7 +123,7 @@ interface MeResponse {
 
 program
   .command('whoami')
-  .description('who you are signed in as, and the active org')
+  .description('who you are signed in as, and the active organization')
   .action(async () => {
     try {
       const c = await client();
@@ -149,16 +149,16 @@ program
 const org = program.command('org').description('active organization');
 org
   .command('use <slug>')
-  .description('remember the org to claim and route as')
+  .description('remember the organization to claim and route as')
   .action(async (slug: string) => {
     const cfg = await loadConfig();
     await saveConfig({ ...cfg, org: slug });
     if (globals().json) printJson({ ok: true, org: slug });
-    else console.log(`Active org: ${slug}`);
+    else console.log(`Active organization: ${slug}`);
   });
 org
   .command('list')
-  .description('orgs you belong to')
+  .description('organizations you belong to')
   .action(async () => {
     try {
       const c = await client();
@@ -257,9 +257,9 @@ withUseOptions(
         const c = await client();
         const me = await c.get<MeResponse>('/api/v1/me');
         signedIn = true;
-        console.log(`Signed in as ${me.user.email}` + (c.auth.org ? ` · org ${c.auth.org}` : ''));
+        console.log(`Signed in as ${me.user.email}` + (c.auth.org ? ` · organization ${c.auth.org}` : ''));
         if (!c.auth.org && me.organizations.length > 1) {
-          console.log('Pick an org: ' + me.organizations.map((o) => `rgstr org use ${o.slug}`).join(' | '));
+          console.log('Pick an organization: ' + me.organizations.map((o) => `rgstr org use ${o.slug}`).join(' | '));
         }
       } catch {
         signedIn = false;
@@ -283,7 +283,7 @@ withUseOptions(program.command('use', { hidden: true })).action(async (opts: Use
 
 program
   .command('status')
-  .description('is this project pointed at rgstr — through which files, and as which org')
+  .description('is this project pointed at rgstr — through which files, and as which organization')
   .action(async () => {
     try {
       const g = globals();
@@ -311,7 +311,7 @@ program
         auth.kind === 'device'
           ? `signed in (device login, ${auth.baseUrl})`
           : auth.kind === 'api_key'
-            ? 'org API key (RGSTR_TOKEN)'
+            ? 'organization API key (RGSTR_TOKEN)'
             : auth.kind === 'stale'
               ? `signed in, but the login could not be refreshed (${auth.error}) — try again online or \`rgstr login\``
               : 'not signed in — `rgstr login`';
@@ -465,9 +465,9 @@ async function checkOne(c: Awaited<ReturnType<typeof client>>, g: ReturnType<typ
     const held = list.held.find((h) => h.name === name);
     const whois = await c.get<WhoisResponse>(`/api/v1/registry/whois/${encodeURIComponent(name)}`);
     if (g.json) return { name, checked: false, held: held ?? null, whois };
-    if (held?.status === 'verified') console.log(`${name}: verified — your org holds it. ${whois.url}`);
+    if (held?.status === 'verified') console.log(`${name}: verified — your organization holds it. ${whois.url}`);
     else if (whois.holder) console.log(`${name}: held by ${whois.holder.name} (${whois.holder.slug}) — file a claim with \`rgstr claim\` to dispute it.`);
-    else console.log(`${name}: no application from your org yet — run \`rgstr claim ${name}\` first.`);
+    else console.log(`${name}: no application from your organization yet — run \`rgstr claim ${name}\` first.`);
     return { name, checked: false, held: held ?? null, whois };
   }
   const res = await c.post<{ outcome: ProofOutcome; request: ClaimsList['pending'][number] }>(`/api/v1/registry/claims/${pending.id}/check-proof`);
@@ -476,7 +476,7 @@ async function checkOne(c: Awaited<ReturnType<typeof client>>, g: ReturnType<typ
   const o = res.outcome;
   if (o.kind === 'verified') {
     console.log(`${name}: verified via ${proofKindLabel({ name, ...o })} — ${o.detail}`);
-    console.log(o.autoApproved ? `Approved: your org now holds ${name}.` : `Proof verified and attached to your application; ${o.reviewReason ?? 'an rgstr reviewer decides'}.`);
+    console.log(o.autoApproved ? `Approved: your organization now holds ${name}.` : `Proof verified and attached to your application; ${o.reviewReason ?? 'an rgstr reviewer decides'}.`);
   } else if (o.kind === 'not_found') {
     const repo = o.repoUrl ?? pending.repoUrl ?? null;
     const where = [o.checked.length ? o.checked.join(', ') : 'npm, PyPI', repo ? `the README of ${repo}` : null].filter(Boolean).join(' and ');
@@ -519,6 +519,7 @@ async function claimOne(
   };
   let claim: ClaimResponse;
   let alreadyPending = false;
+  say(`Claiming ${name} as ${c.auth.org ?? 'the organization your API key belongs to'}`);
   try {
     claim = await c.post<ClaimResponse>('/api/v1/registry/claims', { name, statement: opts.statement });
   } catch (err) {
@@ -547,7 +548,7 @@ async function claimOne(
     ? buildClaimPlan({ name, ecosystem, origin, token: claim.proof.token, repoUrl, badge: claim.badgeMarkdown ?? claim.proof.badge, agentPrompt: claim.agentPrompt })
     : null;
 
-  say(alreadyPending ? `${name}: already under review for ${c.auth.org ?? 'your org'} (${claim.request.id.slice(0, 8)}).` : `Filed: ${name} for ${c.auth.org ?? 'your org'} (${claim.url})`);
+  say(alreadyPending ? `${name}: already under review (${claim.request.id.slice(0, 8)}).` : `Filed: ${name} (${claim.url})`);
   if (claim.dispute) say(`Held by ${claim.dispute.holder} via ${claim.dispute.via} — this is a dispute; a reviewer decides.`);
 
   const out: ClaimOutcome = { name, ecosystem, claim, alreadyPending, repoUrl, plan, readme: null };
@@ -642,7 +643,7 @@ async function claimOne(
 
 program
   .command('claim [name]')
-  .description('claim a name for your org and put the README badge that proves it under the first heading (shows the diff, asks; writes nothing else)')
+  .description('claim a name for your organization and put the README badge that proves it under the first heading (shows the diff, asks; writes nothing else)')
   .option('--check', 'look for the proof: the badge in the repo README on GitHub, or in the README of the published package')
   .option('-y, --yes', 'write the badge without asking (the diff is still shown)')
   .option('--pr', 'after writing: branch rgstr-badge-<name>, commit, push, open the pull request with gh')
@@ -718,6 +719,7 @@ program
         const toJson = (r: ClaimOutcome) => ({
           name: r.name,
           ecosystem: r.ecosystem,
+          org: c.auth.org,
           ...r.claim,
           alreadyPending: r.alreadyPending,
           repoUrl: r.repoUrl,

@@ -120,7 +120,7 @@ export async function resolveAuth(
   throw new RgstrCliError(
     'no_credentials',
     isTrustedHost(baseUrl)
-      ? 'Not logged in. Run `rgstr login`, or set RGSTR_TOKEN to an org API key.'
+      ? 'Not logged in. Run `rgstr login`, or set RGSTR_TOKEN to an organization API key.'
       : `No credentials for ${baseUrl}: stored logins are not sent to untrusted hosts. Set RGSTR_TOKEN explicitly.`,
   );
 }
