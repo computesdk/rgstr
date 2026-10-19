@@ -12,24 +12,24 @@ npx @rgstr/cli claim          # in your package's directory
 npm i -g @rgstr/cli           # or install it: the command is `rgstr`
 ```
 
-Nothing edits your files unless you ask: `claim` shows the diff and asks
-(`--yes` skips the question); outside a checkout it only prints.
-`setup` shows the diff and asks, `--yes` skips the question.
+Nothing edits your files unless you ask: `claim` shows the README diff and
+writes it only with `--yes`. `setup` shows the diff and asks, `--yes` skips the
+question; neither needs a sign-in.
 
 ## The commands
 
 | | |
 | --- | --- |
-| `rgstr claim [name]` | File the claim and put the proof in: inside a git checkout it finds the package(s) and their README, checks `origin` is the repository the package declares on npm/PyPI, shows the badge inserted under the first heading and asks (`--yes` to skip; `--pr` to branch, commit, push and open the PR with `gh`). At a workspace root it only lists the member packages; `--all` claims them all. `--here` keeps the badge in the package's own README, which verifies on the next publish instead. Outside a checkout it prints the badge and an agent prompt. `rgstr claim --check` tells you which README the badge was found in. |
+| `rgstr claim [name]` | File the claim and put the proof in: in a package directory (package.json / pyproject.toml) it finds the package(s) and shows the diff of the README rgstr reads — the folder the package declares on npm/PyPI, else the repository root — with the badge under the first heading; no README there means it says so and shows the file it would create. It writes only with `--yes` (`--pr` then branches, commits, pushes and opens the PR with `gh`). When `origin` is not the repository the package declares, nothing is written. At a workspace root it only lists the member packages; `--all` claims them all. `--here` puts the badge in the package's own README instead, which verifies on the next publish. Without a package here (`rgstr claim <name>`) it prints the badge and an agent prompt. `rgstr claim --check` tells you which README the badge was found in. |
 | `rgstr whois <name>` | Who holds a name, how much to trust it (unclaimed / claimed / verified), where it routes, and whether it is disputed. No login needed. |
 | `rgstr search <query>` | Names in rgstr's order, with trust and weekly downloads. |
-| `rgstr setup` | Point this project's installs at rgstr: shows the `.npmrc` (and yarn/bun/uv/poetry/pip) diff, asks, writes, then says what changed. `--yes` to skip the question, `--dry-run` to only look, `--off` removes exactly what it wrote. Signs you in first if needed. |
-| `rgstr status` | Is this project pointed at rgstr, through which files, as which org and login. |
+| `rgstr setup` | Point this project's installs at rgstr: shows the `.npmrc` (and yarn/bun/uv/poetry/pip) diff, asks, writes, then says what changed and how to undo it. No sign-in needed; signing in (`rgstr login`) is an optional follow-up to apply your organization's rules. `--yes` to skip the question, `--dry-run` to only look, `--off` removes exactly what it wrote. |
+| `rgstr status` | Is this project pointed at rgstr, through which files, as which organization and login. |
 | `rgstr check [name…]` | After `setup`: what resolving this project's dependencies through rgstr does. One line per direct dependency (package.json, pyproject.toml, requirements.txt) with its trust state, holder and where it is served from, then `N of M names are held on rgstr; the rest fall through to npm / PyPI unchanged`. Informational — exit 0 whenever the check ran. |
 | `rgstr route <name> --to npm:other@^1` | Route a name you hold to the package that really ships it. |
 
 Plus `rgstr login` / `logout` / `whoami` (device-code sign-in as the `rgstr-cli`
-client: packages and org read, nothing else on the platform) and
+client: packages and organization read, nothing else on the platform) and
 `rgstr org use <slug>` to pick the organization that holds your names.
 
 ## The proof: a badge in a README

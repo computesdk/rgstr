@@ -114,7 +114,7 @@ describe('rgstr use edge cases', () => {
     const written = await fs.readFile(path.join(dir, 'bunfig.toml'), 'utf8');
     expect(written.match(/\[install\]/g)).toHaveLength(1);
     expect(written).toBe(
-      `[install]\n# >>> rgstr (managed by \`rgstr use\`; remove with \`rgstr use --off\`)\nregistry = "https://rgstr.org/api/registry"\n# <<< rgstr\nexact = true\n\n[test]\ncoverage = true\n`,
+      `[install]\n# >>> rgstr (managed by \`rgstr setup\`; remove with \`rgstr setup --off\`)\nregistry = "https://rgstr.org/api/registry"\n# <<< rgstr\nexact = true\n\n[test]\ncoverage = true\n`,
     );
     expect((await runUse({ dir, origin: ORIGIN, npm: true })).every((c) => c.action === 'unchanged')).toBe(true);
     await runUse({ dir, origin: ORIGIN, off: true });
@@ -189,5 +189,15 @@ describe('rgstr setup plans before it writes', () => {
     await runUse({ dir, origin: ORIGIN, off: true });
     await fs.writeFile(path.join(dir, '.npmrc'), '# registry=https://rgstr.org/api/registry\nregistry=https://rgstr.localhost:3000/api/registry\n');
     expect(await projectStatus(dir)).toEqual([{ file: '.npmrc', clients: ['npm'], origin: 'https://rgstr.localhost:3000', managed: false }]);
+  });
+});
+
+describe('rgstr setup --off on files written by 0.0.x', () => {
+  it('removes the block even when the header still says `rgstr use`', () => {
+    const legacy = '# >>> rgstr (managed by `rgstr use`; remove with `rgstr use --off`) +new\nregistry=https://rgstr.org/api/registry\n# <<< rgstr\n';
+    const back = stripBlock(legacy);
+    expect(back.found).toBe(true);
+    expect(back.createdFile).toBe(true);
+    expect(back.content).toBe('');
   });
 });
