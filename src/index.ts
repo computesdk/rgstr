@@ -505,7 +505,7 @@ async function claimOne(
   const declared = plan.repoUrl;
   const here = ctx.checkout.remote;
   const declaredDir = !opts.here && declared && here && sameRepo(declared, here) ? repoDirectoryFrom(declared) : undefined;
-  const { file, exists, where } = await readmeFor({ ...t, manifest: t.manifest ?? '' }, ctx.checkout.root, ctx.single, declaredDir);
+  const { file, exists, where } = await readmeFor({ ...t, manifest: t.manifest ?? '' }, ctx.checkout.root, opts.here ? false : ctx.single, declaredDir);
   const rel = path.relative(ctx.dir, file) || path.basename(file);
   if (declared && here && !sameRepo(declared, here)) {
     const registry = ecosystem === 'npm' ? 'npm' : 'PyPI';

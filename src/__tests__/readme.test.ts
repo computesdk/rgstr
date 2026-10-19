@@ -220,3 +220,17 @@ describe('after the write', () => {
     expect((await openBadgePr(checkout, ['README.md'], ['tsc-rs'], loggedOut)).reason).toMatch(/not signed in/);
   });
 });
+
+describe('readmeFor ignores declared directories outside the checkout', () => {
+  it('treats `..` and absolute directories as undeclared', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rgstr-readme-'));
+    await fs.mkdir(path.join(root, 'packages', 'a'), { recursive: true });
+    await fs.writeFile(path.join(root, 'README.md'), '# root\n');
+    const target = { dir: path.join(root, 'packages', 'a'), manifest: path.join(root, 'packages', 'a', 'package.json') } as Parameters<typeof readmeFor>[0];
+    for (const bad of ['../../etc', 'packages/../../x', '/tmp/x']) {
+      const pick = await readmeFor(target, root, false, bad);
+      expect(pick.where).toBe('own');
+      expect(pick.file).toBe(path.join(root, 'packages', 'a', 'README.md'));
+    }
+  });
+});

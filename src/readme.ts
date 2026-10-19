@@ -214,11 +214,15 @@ const relDir = (root: string, dir: string) => path.relative(root, dir).split(pat
  *  Without one (`undefined`): its own README, else (single package) the repo
  *  root's, else a new README.md next to the manifest. */
 export async function readmeFor(target: PackageTarget, repoRoot: string | null, single: boolean, declared?: string | null): Promise<ReadmeChoice> {
+  // Registry metadata is untrusted: a declared directory that climbs out of
+  // the checkout (`..`, absolute) is ignored, never resolved.
+  const parts = declared ? declared.replace(/^\.?\//, '').replace(/\/+$/, '').split('/').filter(Boolean) : [];
+  if (declared && (path.isAbsolute(declared) || parts.some((p) => p === '..'))) declared = undefined;
   if (declared !== undefined && repoRoot) {
-    const want = declared ? declared.replace(/^\.?\//, '').replace(/\/+$/, '') : '';
+    const want = parts.join('/');
     const here = relDir(repoRoot, target.dir);
     if (want !== here) {
-      const dir = path.join(repoRoot, ...want.split('/').filter(Boolean));
+      const dir = path.join(repoRoot, ...parts);
       const found = await findReadmeIn(dir);
       return { file: found ?? path.join(dir, 'README.md'), exists: !!found, where: want ? 'declared' : 'root' };
     }

@@ -119,3 +119,11 @@ describe('repoDirectoryFrom', () => {
     expect(await fetchRepoUrl(ORIGIN, 'x', 'npm', fetchImpl)).toBe('https://github.com/o/r/tree/HEAD/packages/x');
   });
 });
+
+describe('fetchRepoUrl (PyPI)', () => {
+  it('keeps a /tree/<ref>/<dir> project URL folder', async () => {
+    const fetchImpl = (async () =>
+      new Response(JSON.stringify({ info: { project_urls: { Source: 'https://github.com/o/r/tree/main/py/pkg' } } }), { status: 200 })) as unknown as typeof fetch;
+    expect(await fetchRepoUrl('https://rgstr.org', 'pkg', 'pypi', fetchImpl)).toBe('https://github.com/o/r/tree/HEAD/py/pkg');
+  });
+});

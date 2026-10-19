@@ -92,7 +92,10 @@ export async function fetchRepoUrl(
     const doc = (await res.json()) as { info?: { project_urls?: Record<string, string> | null; home_page?: string | null } };
     const urls = Object.values(doc.info?.project_urls ?? {});
     const github = urls.find((u) => /github\.com/.test(u)) ?? (doc.info?.home_page && /github\.com/.test(doc.info.home_page) ? doc.info.home_page : undefined);
-    return repoUrlFrom(github ?? urls[0] ?? null);
+    const src = github ?? urls[0] ?? null;
+    const url = repoUrlFrom(src);
+    const dir = url ? repoDirectoryFrom(src) : null;
+    return url && dir ? `${url}/tree/HEAD/${dir}` : url;
   } catch {
     return null;
   }
