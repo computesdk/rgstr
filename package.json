@@ -1,0 +1,60 @@
+{
+  "name": "rgstr",
+  "version": "0.0.0",
+  "description": "rgstr CLI — claim, verify and route package names across npm and PyPI (https://rgstr.org)",
+  "author": "computesdk",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "rgstr": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "clean": "rimraf dist",
+    "dev": "tsup --watch",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src",
+    "changeset": "changeset",
+    "version": "changeset version",
+    "release": "pnpm build && changeset publish"
+  },
+  "keywords": [
+    "rgstr",
+    "registry",
+    "npm",
+    "pypi",
+    "package",
+    "naming",
+    "cli"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/computesdk/rgstr.git"
+  },
+  "homepage": "https://rgstr.org",
+  "bugs": {
+    "url": "https://github.com/computesdk/rgstr/issues"
+  },
+  "devDependencies": {
+    "@changesets/cli": "^2.27.0",
+    "@types/node": "^20.0.0",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "eslint": "^8.37.0",
+    "rimraf": "^5.0.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^1.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "packageManager": "pnpm@9.15.0"
+}
