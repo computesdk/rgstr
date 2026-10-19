@@ -1,39 +1,40 @@
 import { describe, it, expect } from 'vitest';
-import { agentPrompt, badgeMarkdown, buildClaimPlan, fetchRepoUrl, manifestSnippet, proofKindLabel, renderClaimPlan, repoDirectoryFrom, repoUrlFrom } from '../claim.js';
+import { agentPrompt, badgeMarkdown, buildClaimPlan, fetchRepoUrl, proofKindLabel, renderClaimPlan, repoDirectoryFrom, repoUrlFrom } from '../claim.js';
 
 const ORIGIN = 'https://rgstr.org';
 const TOKEN = 'rgstr_abcdefghijklmnopqrst';
 const BADGE = `[![rgstr](https://rgstr.org/registry/tsc-rs/badge.svg?proof=${TOKEN})](https://rgstr.org/registry/tsc-rs)`;
 
 describe('claim output', () => {
-  it('builds the same badge and manifest lines as the server', () => {
+  it('builds the same badge as the server', () => {
     expect(badgeMarkdown(ORIGIN, 'tsc-rs', TOKEN)).toBe(BADGE);
     expect(badgeMarkdown('https://rgstr.org/', '@scope/pkg', TOKEN)).toContain('/registry/@scope/pkg/badge.svg?proof=');
-    expect(manifestSnippet(ORIGIN, 'tsc-rs', TOKEN, 'npm')).toBe(`"rgstr": "${TOKEN}"`);
-    expect(manifestSnippet(ORIGIN, 'tsc-rs', TOKEN, 'pypi')).toBe(`rgstr = "https://rgstr.org/registry/tsc-rs?proof=${TOKEN}"`);
   });
 
-  it('prints badge, then the agent prompt, then the release fallback — and nothing about writing files', () => {
+  it('prints badge, then the agent prompt, then the package-README route — never a manifest line', () => {
     const plan = buildClaimPlan({ name: 'tsc-rs', ecosystem: 'npm', origin: ORIGIN, token: TOKEN, repoUrl: 'https://github.com/pingdotgg/ts-rust' });
     const out = renderClaimPlan(plan);
     const badgeAt = out.indexOf(BADGE);
     const promptAt = out.indexOf('2. Or hand this to your coding agent');
-    const releaseAt = out.indexOf('3. Or ship it in your next release');
+    const hereAt = out.indexOf('3. Or put the same badge in the README that ships with the package (`rgstr claim --here` in its checkout);');
     expect(badgeAt).toBeGreaterThan(-1);
     expect(badgeAt).toBeLessThan(promptAt);
-    expect(promptAt).toBeLessThan(releaseAt);
+    expect(promptAt).toBeLessThan(hereAt);
     expect(out).toContain('Add this badge to the README of https://github.com/pingdotgg/ts-rust (the repository tsc-rs declares on npm)');
     expect(out).toContain('Merge it, then run: rgstr claim --check tsc-rs');
     expect(out).toContain('```\n   In a checkout of the repository https://github.com/pingdotgg/ts-rust, run `npx @rgstr/cli claim --yes --pr tsc-rs`');
-    expect(out).toContain(`"rgstr": "${TOKEN}"`);
-    expect(out).toContain('`rgstr claim --write` adds it for you');
+    expect(out).toContain('it verifies on the next publish to npm. Publish, then: rgstr claim --check tsc-rs');
+    expect(out).not.toContain('"rgstr":');
+    expect(out).not.toMatch(/package\.json|pyproject|--write|manifest/);
+    expect(plan).not.toHaveProperty('manifest');
   });
 
   it('says so when the package declares no repository', () => {
     const plan = buildClaimPlan({ name: 'newpkg', ecosystem: 'pypi', origin: ORIGIN, token: TOKEN, repoUrl: null });
     expect(renderClaimPlan(plan)).toContain('the GitHub repository newpkg declares on PyPI (none found in its metadata yet)');
     expect(plan.agentPrompt).toContain('the GitHub repository that publishes newpkg');
-    expect(renderClaimPlan(plan)).toContain('pyproject.toml, under [project.urls]');
+    expect(renderClaimPlan(plan)).toContain('it verifies on the next publish to PyPI');
+    expect(renderClaimPlan(plan)).not.toMatch(/\[project\.urls\]|pyproject/);
   });
 
   it('is one paragraph the agent can take verbatim: PR, merge, claim --check, no release', () => {
@@ -45,6 +46,7 @@ describe('claim output', () => {
     expect(prompt).toMatch(/merge it/i);
     expect(prompt).toContain('npx @rgstr/cli claim --check tsc-rs');
     expect(prompt).toContain('do not publish a release');
+    expect(prompt).not.toMatch(/package\.json|pyproject|manifest/);
   });
 
   it('prefers the badge and prompt the server sends', () => {
@@ -90,14 +92,20 @@ describe('repository URLs', () => {
 });
 
 describe('--check proof kinds', () => {
-  it('names the proof that matched', () => {
-    expect(proofKindLabel({ sighting: { ecosystem: 'npm', placement: 'manifest', version: '0.7.1' } })).toBe('package.json@0.7.1');
-    expect(proofKindLabel({ sighting: { ecosystem: 'pypi', placement: 'manifest', version: '1.0' } })).toBe('pyproject.toml@1.0');
-    expect(proofKindLabel({ sighting: { ecosystem: 'npm', placement: 'readme', version: '0.7.1' } })).toBe('README-in-package@0.7.1');
-    expect(proofKindLabel({ sighting: { placement: 'badge', repo: 'https://github.com/pingdotgg/ts-rust' } })).toBe('badge on github.com/pingdotgg/ts-rust');
-    expect(proofKindLabel({ sighting: { placement: 'github_readme' } })).toBe('badge on GitHub');
-    expect(proofKindLabel({ repoUrl: 'https://github.com/o/r', detail: 'x' })).toBe('badge on o/r'.replace('o/r', 'github.com/o/r'));
+  it('readme → the badge in the published package, repo_readme → the badge on GitHub', () => {
+    expect(proofKindLabel({ name: 'tsc-rs', sighting: { ecosystem: 'npm', placement: 'readme', version: '0.7.1' } })).toBe('README badge in tsc-rs@0.7.1 on npm');
+    expect(proofKindLabel({ name: 'requests', sighting: { ecosystem: 'pypi', placement: 'readme', version: '2.32.0' } })).toBe('README badge in requests@2.32.0 on PyPI');
+    expect(proofKindLabel({ name: 'tsc-rs', sighting: { placement: 'repo_readme', repo: 'https://github.com/pingdotgg/ts-rust' } })).toBe('README badge on github.com/pingdotgg/ts-rust');
+    expect(proofKindLabel({ name: 'tsc-rs', sighting: { placement: 'repo_readme' }, repoUrl: 'https://github.com/o/r' })).toBe('README badge on github.com/o/r');
+    expect(proofKindLabel({ sighting: { placement: 'repo_readme' } })).toBe('README badge on GitHub');
+    expect(proofKindLabel({ repoUrl: 'https://github.com/o/r', detail: 'x' })).toBe('README badge on github.com/o/r');
+  });
+
+  it('renders a placement it does not know without crashing', () => {
     expect(proofKindLabel({ sighting: { placement: 'something_new' }, detail: 'the server said so' })).toBe('the server said so');
+    expect(proofKindLabel({ sighting: { placement: 'something_new' } })).toBe('something new proof');
+    expect(proofKindLabel({ sighting: { placement: 'manifest', version: '1.0' } })).toBe('manifest proof');
+    expect(proofKindLabel({})).toBe('proof');
   });
 });
 

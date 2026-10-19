@@ -1,6 +1,6 @@
 /**
  * rgstr — the terminal front door for rgstr (https://rgstr.org), the package
- * naming registry. Standalone: claim a name, prove it from your next publish,
+ * naming registry. Standalone: claim a name, prove it with the README badge,
  * route it, point your installs through it.
  */
 
@@ -21,7 +21,7 @@ import {
   type GlobalOptions,
 } from './client.js';
 import { fmtDownloads, kv, printJson, table } from './output.js';
-import { withNpmProof, withPypiProof, type Ecosystem } from './project.js';
+import type { Ecosystem } from './project.js';
 import { chooseTargets, detectPackages, gitCheckout, nextSteps, openBadgePr, planBadge, readmeFor, sameRepo, shortRepo, workspaceGlobs, type GitCheckout, type PackageTarget } from './readme.js';
 import { formatRouteRow, parseRouteSpec, type RouteInput, type RouteRecord } from './routes.js';
 import { applyUse, planUse, projectStatus, unifiedDiff, type UseChange } from './use.js';
@@ -325,9 +325,11 @@ program
 interface ClaimResponse {
   request: { id: string; name: string; status: string; verification: string };
   dispute: { holder: string; via: string } | null;
-  proof: { token: string; packageJson: string; pyproject: string; badge: string } | null;
+  // The badge is the only proof; older servers also sent manifest lines
+  // here, which are ignored.
+  proof: { token: string; badge?: string | null } | null;
   url: string;
-  // Sent by newer servers (the GitHub README-badge proof); rendered when present.
+  // Sent by newer servers; rendered when present.
   badgeMarkdown?: string | null;
   agentPrompt?: string | null;
   repoUrl?: string | null;
@@ -344,8 +346,6 @@ type ProofOutcome =
 
 type ClaimOpts = {
   check?: boolean;
-  write?: boolean;
-  manifest?: boolean;
   badge?: boolean;
   yes?: boolean;
   pr?: boolean;
@@ -358,14 +358,6 @@ type ClaimOpts = {
 
 /** A package to claim: detected here, or just a name typed on the command line. */
 type ClaimTarget = Omit<PackageTarget, 'manifest'> & { manifest: string | null };
-
-/** Print the diff, then write. The only way `claim` touches a file. */
-async function writeShown(dir: string, file: string, current: string | null, next: string): Promise<string> {
-  const rel = path.relative(dir, file) || file;
-  console.log(unifiedDiff(rel, current, next));
-  await fs.writeFile(file, next);
-  return rel;
-}
 
 /** One package's `--check`. Prints the human lines; returns the JSON shape
  *  so a workspace run can emit a single document. */
@@ -383,18 +375,18 @@ async function checkOne(c: Awaited<ReturnType<typeof client>>, g: ReturnType<typ
     return { name, checked: false, held: held ?? null, whois };
   }
   const res = await c.post<{ outcome: ProofOutcome; request: ClaimsList['pending'][number] }>(`/api/v1/registry/claims/${pending.id}/check-proof`);
-  const result = { name, ...res, ...(res.outcome.kind === 'verified' ? { proofKind: proofKindLabel(res.outcome) } : {}) };
+  const result = { name, ...res, ...(res.outcome.kind === 'verified' ? { proofKind: proofKindLabel({ name, ...res.outcome }) } : {}) };
   if (g.json) return result;
   const o = res.outcome;
   if (o.kind === 'verified') {
-    console.log(`${name}: verified via ${proofKindLabel(o)} — ${o.detail}`);
+    console.log(`${name}: verified via ${proofKindLabel({ name, ...o })} — ${o.detail}`);
     console.log(o.autoApproved ? `Approved: your org now holds ${name}.` : `Proof verified and attached to your application; ${o.reviewReason ?? 'an rgstr reviewer decides'}.`);
   } else if (o.kind === 'not_found') {
     const repo = o.repoUrl ?? pending.repoUrl ?? null;
     const where = [o.checked.length ? o.checked.join(', ') : 'npm, PyPI', repo ? `the README of ${repo}` : null].filter(Boolean).join(' and ');
     console.log(`${name}: no proof found yet (checked ${where}${t.version ? `; local version ${t.version}` : ''}).`);
     if (o.failed.length) console.log(`Could not reach: ${o.failed.join(', ')}.`);
-    console.log(`Add the badge to the repository README and merge it (\`rgstr claim ${name}\` prints it), or publish a release carrying the token, then run \`rgstr claim --check ${name}\` again.`);
+    console.log(`Add the badge to the repository README and merge it (\`rgstr claim ${name}\` prints it), or ship it in the package README (\`rgstr claim --here\`) and publish, then run \`rgstr claim --check ${name}\` again.`);
   } else console.log(`${name}: check failed — ${o.message}`);
   return result;
 }
@@ -413,7 +405,6 @@ interface ClaimOutcome {
   alreadyPending: boolean;
   repoUrl: string | null;
   plan: ReturnType<typeof buildClaimPlan> | null;
-  wrote: { file: string; line: string } | null;
   readme: ReadmeOutcome | null;
 }
 
@@ -437,7 +428,7 @@ async function claimOne(
   } catch (err) {
     if (!(err instanceof RgstrApiError && err.status === 409)) throw err;
     // Already applied: carry on with that application's proof so a retry
-    // prints the same badge and token.
+    // prints the same badge.
     const list = await c.get<ClaimsList>('/api/v1/registry/claims');
     const pending = list.pending.find((p) => p.name === name);
     if (!pending) throw err;
@@ -463,25 +454,7 @@ async function claimOne(
   say(alreadyPending ? `${name}: already under review for ${c.auth.org ?? 'your org'} (${claim.request.id.slice(0, 8)}).` : `Filed: ${name} for ${c.auth.org ?? 'your org'} (${claim.url})`);
   if (claim.dispute) say(`Held by ${claim.dispute.holder} via ${claim.dispute.via} — this is a dispute; a reviewer decides.`);
 
-  let wrote: { file: string; line: string } | null = null;
-  if (plan && claim.proof && (opts.write || opts.manifest)) {
-    if (t.manifest?.endsWith('setup.cfg')) {
-      throw new RgstrCliError('invalid_argument', `--write needs a pyproject.toml ([project.urls]); setup.cfg has no place for the proof URL. Use the README badge instead — \`rgstr claim ${name}\` in the repository checkout puts it there.`);
-    }
-    if (t.manifest && t.ecosystem === ecosystem) {
-      const source = await fs.readFile(t.manifest, 'utf8');
-      const { next, changed } = ecosystem === 'npm' ? withNpmProof(source, claim.proof.token) : withPypiProof(source, plan.manifest);
-      const rel = path.relative(ctx.dir, t.manifest) || path.basename(t.manifest);
-      wrote = { file: changed && !g.json ? await writeShown(ctx.dir, t.manifest, source, next) : rel, line: plan.manifest };
-      if (changed && g.json) await fs.writeFile(t.manifest, next);
-      say(`${wrote.file}: ${wrote.line}`);
-      say(`Publish a release that carries it, then: rgstr claim --check ${name}`);
-    } else {
-      throw new RgstrCliError('invalid_argument', `--write needs the ${ecosystem === 'npm' ? 'package.json' : 'pyproject.toml'} of ${name} in the current directory; without it, \`rgstr claim ${name}\` prints the token to add.`);
-    }
-  }
-
-  const out: ClaimOutcome = { name, ecosystem, claim, alreadyPending, repoUrl, plan, wrote, readme: null };
+  const out: ClaimOutcome = { name, ecosystem, claim, alreadyPending, repoUrl, plan, readme: null };
   if (!plan) {
     say('Namespace claims are reviewed on identity + evidence; nothing to publish.');
     return out;
@@ -523,7 +496,7 @@ async function claimOne(
     return out;
   }
   if (!declared) {
-    say(`\n(${name} declares no repository on ${ecosystem === 'npm' ? 'npm' : 'PyPI'}${here ? `; this checkout is ${shortRepo(here)}` : ''}. Add \`repository\` to the manifest in your next release so rgstr knows where to look.)`);
+    say(`\n(${name} declares no repository on ${ecosystem === 'npm' ? 'npm' : 'PyPI'}${here ? `; this checkout is ${shortRepo(here)}` : ''}. Declare \`repository\` in your next release so rgstr knows where to look, or keep the badge in the package README with --here.)`);
   }
 
   if (opts.here && declared && repoDirectoryFrom(declared) === null && path.resolve(ctx.checkout.root) !== path.resolve(t.dir)) {
@@ -574,13 +547,11 @@ async function claimOne(
 program
   .command('claim [name]')
   .description('claim a name for your org and put the README badge that proves it under the first heading (shows the diff, asks; writes nothing else)')
-  .option('--check', 'look for the proof: the badge in the repo README on GitHub, or the token in a published release')
+  .option('--check', 'look for the proof: the badge in the repo README on GitHub, or in the README of the published package')
   .option('-y, --yes', 'write the badge without asking (the diff is still shown)')
   .option('--pr', 'after writing: branch rgstr-badge-<name>, commit, push, open the pull request with gh')
   .option('--all', 'at a workspace root (pnpm/npm/yarn workspaces, uv): claim every member package; without it the root only lists them')
   .option('--here', "keep the badge in this package's own README even when the registry points at the repository root — it then verifies on the next publish (the badge ships in the package README) rather than on merge")
-  .option('--write', 'also write the publish-proof token into package.json / pyproject.toml here (shows the diff first)')
-  .addOption(new Option('--manifest', 'same as --write').hideHelp())
   .addOption(new Option('--badge', 'same as --yes').hideHelp())
   .option('--npm', 'treat the package as npm')
   .option('--pip', 'treat the package as PyPI')
@@ -656,8 +627,6 @@ program
           repoUrl: r.repoUrl,
           badge: r.plan?.badge ?? null,
           agentPrompt: r.plan?.agentPrompt ?? null,
-          manifest: r.plan?.manifest ?? null,
-          wrote: r.wrote,
           readme: r.readme,
         });
         printJson(results.length === 1 ? { ...toJson(results[0]), pr } : { packages: results.map(toJson), pr });
