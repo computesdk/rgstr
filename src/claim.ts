@@ -44,7 +44,9 @@ export function repoUrlFrom(raw: unknown): string | null {
 }
 
 /** Where the package says its source lives, from public registry metadata:
- *  npm's packument via the rgstr proxy, PyPI's JSON API. No credentials. */
+ *  npm's packument via the rgstr proxy, PyPI's JSON API. No credentials, and
+ *  redirects are not followed (a 3xx is "no answer"), so a server cannot
+ *  point the CLI at another host. */
 export async function fetchRepoUrl(
   origin: string,
   name: string,
@@ -53,12 +55,12 @@ export async function fetchRepoUrl(
 ): Promise<string | null> {
   try {
     if (ecosystem === 'npm') {
-      const res = await fetchImpl(`${origin}/api/registry/${encodeURIComponent(name)}`, { headers: { accept: 'application/json' } });
+      const res = await fetchImpl(`${origin}/api/registry/${encodeURIComponent(name)}`, { headers: { accept: 'application/json' }, redirect: 'manual' });
       if (!res.ok) return null;
       const doc = (await res.json()) as { repository?: unknown; homepage?: unknown };
       return repoUrlFrom(doc.repository) ?? (typeof doc.homepage === 'string' && /github\.com/.test(doc.homepage) ? repoUrlFrom(doc.homepage) : null);
     }
-    const res = await fetchImpl(`https://pypi.org/pypi/${encodeURIComponent(name)}/json`, { headers: { accept: 'application/json' } });
+    const res = await fetchImpl(`https://pypi.org/pypi/${encodeURIComponent(name)}/json`, { headers: { accept: 'application/json' }, redirect: 'manual' });
     if (!res.ok) return null;
     const doc = (await res.json()) as { info?: { project_urls?: Record<string, string> | null; home_page?: string | null } };
     const urls = Object.values(doc.info?.project_urls ?? {});

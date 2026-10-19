@@ -220,6 +220,8 @@ export interface DeviceLoginOptions {
   fetchImpl?: typeof fetch;
 }
 
+const FALLBACK_ERRORS = new Set(['invalid_client', 'unauthorized_client', 'invalid_scope']);
+
 /** Run the whole device flow and persist the credentials for `baseUrl`.
  *  The device-code request is where an unknown client or scope is rejected,
  *  so that is the only step that moves on to the next client. */
@@ -234,7 +236,10 @@ export async function deviceLogin(options: DeviceLoginOptions): Promise<Credenti
     try {
       code = await requestDeviceCode(server, client.clientId, client.scope, fetchImpl);
     } catch (err) {
-      if (!(err instanceof DeviceFlowError) || i === clients.length - 1) throw err;
+      // Only "this server does not know that client / scope" moves on; any
+      // other failure surfaces, so a broader client is never tried by accident.
+      const unknownClient = err instanceof DeviceFlowError && FALLBACK_ERRORS.has(err.code);
+      if (!unknownClient || i === clients.length - 1) throw err;
     }
   }
   if (!code) throw new DeviceFlowError('server_error', 'No OAuth client accepted the login request.');

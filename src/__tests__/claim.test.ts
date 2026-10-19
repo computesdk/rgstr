@@ -81,7 +81,9 @@ describe('repository URLs', () => {
     expect(calls[0].url).toBe('https://rgstr.org/api/registry/%40scope%2Fpkg');
     expect((calls[0].init?.headers as Record<string, string>).authorization).toBeUndefined();
     expect(await fetchRepoUrl(ORIGIN, 'requests', 'pypi', fetchImpl)).toBe('https://github.com/psf/requests');
+    expect(calls[0].init?.redirect).toBe('manual');
     expect(await fetchRepoUrl(ORIGIN, 'missing', 'npm', (async () => new Response('', { status: 404 })) as unknown as typeof fetch)).toBeNull();
+    expect(await fetchRepoUrl(ORIGIN, 'moved', 'npm', (async () => new Response('', { status: 302, headers: { location: 'http://10.0.0.1/' } })) as unknown as typeof fetch)).toBeNull();
     expect(await fetchRepoUrl(ORIGIN, 'down', 'npm', (async () => { throw new TypeError('fetch failed'); }) as unknown as typeof fetch)).toBeNull();
   });
 });

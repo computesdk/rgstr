@@ -182,4 +182,17 @@ describe('login scopes', () => {
     }) as unknown as typeof fetch;
     await expect(deviceLogin({ baseUrl: 'https://rgstr.org', fetchImpl: rejecting })).rejects.toThrow(/nope/);
   });
+
+  it('does not fall back to the platform client on errors other than an unknown client or scope', async () => {
+    const asked: string[] = [];
+    const flaky = (async (url: string, init?: RequestInit) => {
+      if (url.endsWith('/.well-known/oauth-protected-resource/api/v1')) {
+        return new Response(JSON.stringify({ resource: server.resource, authorization_servers: [server.authBaseUrl] }));
+      }
+      asked.push((init?.body as URLSearchParams).get('client_id')!);
+      return new Response(JSON.stringify({ error: 'server_error', error_description: 'db down' }), { status: 500 });
+    }) as unknown as typeof fetch;
+    await expect(deviceLogin({ baseUrl: 'https://rgstr.org', fetchImpl: flaky })).rejects.toThrow(/db down/);
+    expect(asked).toEqual(['rgstr-cli']);
+  });
 });

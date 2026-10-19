@@ -62,7 +62,10 @@ async function loginFlow(): Promise<void> {
       assertHostAllowed(baseUrl, opts.allowUntrustedHost);
       const creds = await deviceLogin({
         baseUrl,
-        onPrompt: (code) => {
+        onPrompt: (code, oauthClient) => {
+          if (oauthClient.clientId === PLATFORM_OAUTH_CLIENT_ID) {
+            console.log(`The registry-only client is not on this server yet; the approval page will ask for the platform scopes (${oauthClient.scope}).`);
+          }
           // --json keeps stdout a single document; the prompt still has to reach the user.
           const out = opts.json ? console.error : console.log;
           out('To sign in, visit:');
@@ -244,7 +247,9 @@ withUseOptions(
     .description('point this project\'s installs at rgstr (.npmrc / pip config): shows the diff, asks, writes; signs you in first if needed'),
 ).action(async (opts: UseOpts) => {
   try {
-    if (!opts.off && !opts.dryRun) {
+    // Signing in is only to pick the org for the hint below; --json callers
+    // want the plan, not a device-code prompt in the middle of their output.
+    if (!opts.off && !opts.dryRun && !globals().json) {
       let signedIn = false;
       try {
         const c = await client();
@@ -282,7 +287,15 @@ program
       const g = globals();
       const dir = process.cwd();
       const files = await projectStatus(dir);
-      const auth = await resolveAuth({ ...g, optional: true });
+      // A stored login that cannot be refreshed right now (offline, server
+      // down) must not hide the local answer.
+      const auth = await resolveAuth({ ...g, optional: true }).catch(async (err: unknown) => ({
+        baseUrl: await resolveBaseUrl(g),
+        token: null,
+        kind: 'stale' as const,
+        org: g.org || process.env.RGSTR_ORG || (await loadConfig()).org || null,
+        error: err instanceof Error ? err.message : String(err),
+      }));
       if (g.json) {
         printJson({ dir, pointed: files.length > 0, files, baseUrl: auth.baseUrl, auth: auth.kind, org: auth.org });
         return;
@@ -291,7 +304,13 @@ program
         ? files.map((f) => `${f.file} (${f.clients.join(', ') || '?'}) → ${f.origin}${f.managed ? '' : ' — not written by rgstr setup'}`).join('\n' + ' '.repeat(9))
         : 'off — installs go straight to npm / PyPI (`rgstr setup` to point them at rgstr)';
       const who =
-        auth.kind === 'device' ? `signed in (device login, ${auth.baseUrl})` : auth.kind === 'api_key' ? 'org API key (RGSTR_TOKEN)' : 'not signed in — `rgstr login`';
+        auth.kind === 'device'
+          ? `signed in (device login, ${auth.baseUrl})`
+          : auth.kind === 'api_key'
+            ? 'org API key (RGSTR_TOKEN)'
+            : auth.kind === 'stale'
+              ? `signed in, but the login could not be refreshed (${auth.error}) — try again online or \`rgstr login\``
+              : 'not signed in — `rgstr login`';
       console.log(kv([['project', dir], ['rgstr', rgstr], ['org', auth.org ?? '(none — rgstr org use <slug>)'], ['auth', who]]));
     } catch (err) {
       fail(err);
@@ -446,7 +465,11 @@ program
       }
       if (wrote) {
         console.log(`${wrote.file}: ${wrote.line}`);
-        console.log(`Publish a release that carries it, then: rgstr claim --check ${name}`);
+        console.log(
+          opts.badge
+            ? `Merge it (rgstr reads the repository README on GitHub) or publish a release that carries it, then: rgstr claim --check ${name}`
+            : `Publish a release that carries it, then: rgstr claim --check ${name}`,
+        );
         return;
       }
       if (alreadyPending) console.log(`${name}: already under review for ${c.auth.org ?? 'your org'} (${claim.request.id.slice(0, 8)}).`);
