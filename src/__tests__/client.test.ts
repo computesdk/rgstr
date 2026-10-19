@@ -69,9 +69,13 @@ describe('resolveAuth', () => {
     await expect(resolveAuth({ baseUrl: 'http://rgstr.org', allowUntrustedHost: true })).rejects.toMatchObject({ code: 'insecure_transport' });
   });
 
-  it('is optional for public commands', async () => {
+  it('is optional for public commands, even when the stored login is dead', async () => {
     const auth = await resolveAuth({ optional: true }, { loadCredentials: async () => null });
     expect(auth).toMatchObject({ kind: 'none', token: null });
+    const dead = { ...stored, refreshToken: 'r', tokenExpiresAt: Date.now() - 1 };
+    const failing = (async () => new Response(JSON.stringify({ error: 'invalid_grant', error_description: 'expired' }), { status: 400 })) as unknown as typeof fetch;
+    expect(await resolveAuth({ optional: true }, { loadCredentials: async () => dead, fetchImpl: failing })).toMatchObject({ kind: 'none' });
+    await expect(resolveAuth({}, { loadCredentials: async () => dead, fetchImpl: failing })).rejects.toMatchObject({ code: 'no_credentials' });
   });
 });
 
@@ -90,6 +94,13 @@ describe('RgstrClient', () => {
     expect(headers.authorization).toBe('Bearer t');
     expect(headers['x-org-slug']).toBe('acme');
     await expect(c.get('/boom')).rejects.toMatchObject({ status: 409, message: 'Name already claimed' });
+    expect((calls[0].init as { redirect?: string }).redirect).toBe('manual');
+  });
+
+  it('refuses to follow redirects with the bearer token', async () => {
+    const fetchImpl = (async () => new Response(null, { status: 302, headers: { location: 'https://evil.example/x' } })) as unknown as typeof fetch;
+    const c = new RgstrClient({ baseUrl: 'https://rgstr.org', token: 't', kind: 'api_key', org: null }, fetchImpl);
+    await expect(c.get('/api/v1/me')).rejects.toMatchObject({ status: 302 });
   });
 });
 

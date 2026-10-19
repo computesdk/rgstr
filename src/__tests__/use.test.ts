@@ -41,7 +41,7 @@ describe('rgstr use blocks', () => {
   });
 
   it('leaves files without a block alone on --off', () => {
-    expect(stripBlock('registry=https://example.com\n')).toEqual({ content: 'registry=https://example.com\n', found: false });
+    expect(stripBlock('registry=https://example.com\n')).toEqual({ content: 'registry=https://example.com\n', found: false, createdFile: false });
   });
 
   it('prints a unified diff of just the block', () => {
@@ -119,6 +119,30 @@ describe('rgstr use edge cases', () => {
     expect((await runUse({ dir, origin: ORIGIN, npm: true })).every((c) => c.action === 'unchanged')).toBe(true);
     await runUse({ dir, origin: ORIGIN, off: true });
     expect(await fs.readFile(path.join(dir, 'bunfig.toml'), 'utf8')).toBe(original);
+  });
+
+  it('replaces an existing registry key inside [install] and restores it on --off', async () => {
+    const original = '[install]\nregistry = "https://registry.npmjs.org"\nexact = true\n';
+    const dir = await tmp({ 'package.json': '{}', 'bun.lock': '', 'bunfig.toml': original });
+    await runUse({ dir, origin: ORIGIN, npm: true });
+    const written = await fs.readFile(path.join(dir, 'bunfig.toml'), 'utf8');
+    expect(written.match(/^registry = /gm)).toHaveLength(1);
+    expect(written).toContain('registry = "https://rgstr.org/api/registry"');
+    expect(written).toContain('#rgstr-was: registry = "https://registry.npmjs.org"');
+    await runUse({ dir, origin: ORIGIN, off: true });
+    expect(await fs.readFile(path.join(dir, 'bunfig.toml'), 'utf8')).toBe(original);
+  });
+
+  it('--off keeps a file that was empty before, and deletes one it created', async () => {
+    const dir = await tmp({ 'package.json': '{}', '.npmrc': '' });
+    await runUse({ dir, origin: ORIGIN });
+    await runUse({ dir, origin: ORIGIN, off: true });
+    expect(await fs.readFile(path.join(dir, '.npmrc'), 'utf8')).toBe('');
+    const dir2 = await tmp({ 'package.json': '{}' });
+    await runUse({ dir: dir2, origin: ORIGIN });
+    await runUse({ dir: dir2, origin: ORIGIN }); // re-run keeps the created mark
+    await runUse({ dir: dir2, origin: ORIGIN, off: true });
+    await expect(fs.access(path.join(dir2, '.npmrc'))).rejects.toThrow();
   });
 
   it('--off still cleans a file whose manifest is gone', async () => {

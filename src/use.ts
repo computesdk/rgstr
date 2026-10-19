@@ -8,6 +8,8 @@ import path from 'node:path';
 export const BLOCK_START = '# >>> rgstr (managed by `rgstr use`; remove with `rgstr use --off`)';
 export const BLOCK_END = '# <<< rgstr';
 const NEEDS_NEWLINE = `${BLOCK_START} +nl`;
+/** Header variant for a file the CLI created, so `--off` knows it may delete it. */
+const CREATED_FILE = `${BLOCK_START} +new`;
 
 export type ClientId = 'npm' | 'yarn' | 'bun' | 'pip' | 'uv' | 'poetry';
 
@@ -82,8 +84,9 @@ export async function pipConfigTarget(dir: string): Promise<string | null> {
   return null;
 }
 
-export function renderBlock(lines: string[], needsLeadingNewline: boolean): string {
-  return `${needsLeadingNewline ? NEEDS_NEWLINE : BLOCK_START}\n${lines.join('\n')}\n${BLOCK_END}\n`;
+export function renderBlock(lines: string[], needsLeadingNewline: boolean, createdFile = false): string {
+  const header = createdFile ? CREATED_FILE : needsLeadingNewline ? NEEDS_NEWLINE : BLOCK_START;
+  return `${header}\n${lines.join('\n')}\n${BLOCK_END}\n`;
 }
 
 /** Add or refresh the managed block; unchanged content returns `changed: false`.
@@ -92,33 +95,59 @@ export function renderBlock(lines: string[], needsLeadingNewline: boolean): stri
 export function applyBlock(current: string | null, lines: string[], anchor?: string): { next: string; changed: boolean } {
   const stripped = stripBlock(current ?? '');
   const base = stripped.content;
+  // A re-run keeps the "created by rgstr" mark; a brand-new file gets it.
+  const createdFile = current == null || stripped.createdFile;
   if (anchor) {
     const baseLines = base.split('\n');
     const at = baseLines.findIndex((l) => l.trim() === anchor);
     if (at !== -1) {
       const body = lines[0] === anchor ? lines.slice(1) : lines;
-      baseLines.splice(at + 1, 0, renderBlock(body, false).replace(/\n$/, ''));
-      const next = baseLines.join('\n');
+      // Our keys replace the table's own assignment of the same key (a
+      // duplicate key is invalid TOML/INI); the original line comes back on --off.
+      const keys = body.map((l) => l.match(/^\s*([\w.-]+)\s*=/)?.[1]).filter((k): k is string => !!k);
+      let end = at + 1;
+      while (end < baseLines.length && !/^\s*\[/.test(baseLines[end])) end++;
+      const shadowed: string[] = [];
+      for (let i = at + 1; i < end; i++) {
+        const k = baseLines[i].match(/^\s*([\w.-]+)\s*=/)?.[1];
+        if (k && keys.includes(k)) shadowed.push(baseLines[i]);
+      }
+      const kept = baseLines.filter((l, i) => !(i > at && i < end && shadowed.includes(l)));
+      const block = [...body, ...shadowed.map((l) => `${SHADOW_PREFIX}${l}`)];
+      kept.splice(at + 1, 0, renderBlock(block, false, createdFile).replace(/\n$/, ''));
+      const next = kept.join('\n');
       return { next, changed: next !== (current ?? '') };
     }
   }
   const needsNl = base.length > 0 && !base.endsWith('\n');
-  const next = base + (needsNl ? '\n' : '') + renderBlock(lines, needsNl);
+  const next = base + (needsNl ? '\n' : '') + renderBlock(lines, needsNl, createdFile);
   return { next, changed: next !== (current ?? '') };
 }
 
-/** Remove the managed block, restoring the original bytes around it. */
-export function stripBlock(current: string): { content: string; found: boolean } {
+/** A line the block displaced from an anchored table, kept inside the block
+ *  as a comment so `--off` can put it back where the table header is. */
+const SHADOW_PREFIX = '#rgstr-was: ';
+
+/** Remove the managed block, restoring the original bytes around it.
+ *  `createdFile` says the file did not exist before `rgstr use` wrote it. */
+export function stripBlock(current: string): { content: string; found: boolean; createdFile: boolean } {
   const start = current.indexOf(BLOCK_START);
-  if (start === -1) return { content: current, found: false };
+  if (start === -1) return { content: current, found: false, createdFile: false };
   const endMarker = current.indexOf(BLOCK_END, start);
-  if (endMarker === -1) return { content: current, found: false };
+  if (endMarker === -1) return { content: current, found: false, createdFile: false };
   let end = endMarker + BLOCK_END.length;
   if (current[end] === '\n') end += 1;
   const header = current.slice(start, current.indexOf('\n', start));
   const addedNl = header === NEEDS_NEWLINE;
+  const createdFile = header === CREATED_FILE;
   const before = addedNl && current[start - 1] === '\n' ? current.slice(0, start - 1) : current.slice(0, start);
-  return { content: before + current.slice(end), found: true };
+  const shadowed = current
+    .slice(start, endMarker)
+    .split('\n')
+    .filter((l) => l.startsWith(SHADOW_PREFIX))
+    .map((l) => l.slice(SHADOW_PREFIX.length) + '\n')
+    .join('');
+  return { content: before + shadowed + current.slice(end), found: true, createdFile };
 }
 
 export function unifiedDiff(file: string, before: string | null, after: string | null): string {
@@ -175,8 +204,12 @@ export async function runUse(opts: UseOptions): Promise<UseChange[]> {
   const byFile = new Map<string, ClientConfig[]>();
   for (const c of active) byFile.set(c.file, [...(byFile.get(c.file) ?? []), c]);
   if (opts.off) {
-    // Undo what was written even if the manifest that selected the file is gone since.
-    for (const f of [...MANAGED_FILES, ...(pipTarget ? [path.relative(opts.dir, pipTarget) || pipTarget] : [])]) {
+    // Undo what was written even if the manifest (or the VIRTUAL_ENV) that
+    // selected the file has changed since: scan every place we may have written.
+    const pipPlaces = [process.env.VIRTUAL_ENV, path.join(opts.dir, '.venv')]
+      .filter((v): v is string => !!v)
+      .map((v) => path.relative(opts.dir, path.join(v, 'pip.conf')) || path.join(v, 'pip.conf'));
+    for (const f of [...MANAGED_FILES, ...pipPlaces]) {
       if (!byFile.has(f) && (await exists(path.join(opts.dir, f)))) byFile.set(f, []);
     }
   }
@@ -190,13 +223,14 @@ export async function runUse(opts: UseOptions): Promise<UseChange[]> {
         changes.push({ file, clients, action: 'absent' });
         continue;
       }
-      const { content, found } = stripBlock(current);
+      const { content, found, createdFile } = stripBlock(current);
       if (!found) {
         // Files only visited by the scan are reported when they carried a block.
         if (cs.length > 0) changes.push({ file, clients, action: 'absent' });
         continue;
       }
-      const after = content.length === 0 ? null : content;
+      // Only a file rgstr created goes away; a pre-existing empty file stays empty.
+      const after = createdFile && content.length === 0 ? null : content;
       if (!opts.dryRun) {
         if (after == null) await fs.rm(full);
         else await fs.writeFile(full, after);

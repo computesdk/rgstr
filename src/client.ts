@@ -105,8 +105,13 @@ export async function resolveAuth(
   if (isTrustedHost(baseUrl)) {
     const stored = await (io.loadCredentials ?? loadCredentials)();
     if (stored && normalizeBaseUrl(stored.baseUrl) === baseUrl) {
-      const fresh = await ensureFresh(stored, io.fetchImpl ?? fetch);
-      return { baseUrl, token: fresh.token, kind: 'device', org, credentials: fresh };
+      try {
+        const fresh = await ensureFresh(stored, io.fetchImpl ?? fetch);
+        return { baseUrl, token: fresh.token, kind: 'device', org, credentials: fresh };
+      } catch (err) {
+        // A dead login must not break public commands; they just go anonymous.
+        if (!(opts.optional && err instanceof RgstrCliError && err.code === 'no_credentials')) throw err;
+      }
     }
   }
 
@@ -159,7 +164,12 @@ export class RgstrClient {
       method,
       headers,
       body: body === undefined ? undefined : JSON.stringify(body),
+      // Never let a redirect carry the bearer token to another host.
+      redirect: 'manual',
     });
+    if (res.status >= 300 && res.status < 400) {
+      throw new RgstrApiError(res.status, `Unexpected redirect from ${this.auth.baseUrl}${path} to ${res.headers.get('location') ?? '?'}; refusing to follow with credentials`);
+    }
     const text = await res.text();
     let parsed: unknown = null;
     try {

@@ -74,8 +74,12 @@ program
       });
       const me = await new RgstrClient({ baseUrl, token: creds.token, kind: 'device', org: null }).get<MeResponse>('/api/v1/me');
       const cfg = await loadConfig();
-      if (!cfg.org && me.organizations.length === 1) await saveConfig({ ...cfg, org: me.organizations[0].slug });
-      const org = opts.org || process.env.RGSTR_ORG || (await loadConfig()).org || null;
+      const slugs = me.organizations.map((o) => o.slug);
+      // A remembered org from a different account would make every write 403.
+      const keep = cfg.org && slugs.includes(cfg.org) ? cfg.org : undefined;
+      const next = keep ?? (slugs.length === 1 ? slugs[0] : undefined);
+      if (next !== cfg.org) await saveConfig({ ...cfg, org: next });
+      const org = opts.org || process.env.RGSTR_ORG || next || null;
       if (opts.json) printJson({ ok: true, baseUrl, user: me.user, org, organizations: me.organizations });
       else {
         console.log(`Logged in as ${me.user.email} (${baseUrl})`);
@@ -387,8 +391,13 @@ program
       if (opts.to || opts.rm) {
         let next: RouteInput[] = current.map(({ versionRange, upstreamKind, upstream, upstreamName }) => ({ versionRange, upstreamKind, upstream, upstreamName }));
         if (opts.rm) {
-          const victim = current.find((r) => r.id === opts.rm || r.id.startsWith(opts.rm!));
-          if (!victim) throw new RgstrCliError('not_found', `No route ${opts.rm} on ${name}`);
+          const rm = opts.rm;
+          const matches = current.filter((r) => r.id === rm || r.id.startsWith(rm));
+          if (matches.length === 0) throw new RgstrCliError('not_found', `No route ${rm} on ${name}`);
+          if (matches.length > 1) {
+            throw new RgstrCliError('invalid_argument', `${rm} matches ${matches.length} routes (${matches.map((r) => r.id.slice(0, 12)).join(', ')}) — give more of the id.`);
+          }
+          const victim = matches[0];
           next = next.filter((_, i) => current[i].id !== victim.id);
         }
         if (opts.to) {
