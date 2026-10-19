@@ -357,7 +357,9 @@ program
         } catch (err) {
           // A bad name is that name's problem; anything else means the check could not run.
           if (err instanceof RgstrApiError && err.status >= 400 && err.status < 500 && err.status !== 401 && err.status !== 403) return unansweredRow(d, err.message);
-          throw err;
+          if (err instanceof RgstrApiError) throw err;
+          const cause = (err as { cause?: { code?: string; message?: string } }).cause;
+          throw new Error(`Could not reach ${c.baseUrl} (${cause?.code ?? cause?.message ?? (err instanceof Error ? err.message : String(err))}) — nothing was checked.`);
         }
       });
       const summary = summaryLine(rows);
