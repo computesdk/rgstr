@@ -25,7 +25,7 @@ export function sameRoutes(a: RouteRecord[], b: RouteRecord[]): boolean {
   if (a.length !== b.length) return false;
   return a.every((r, i) => {
     const o = b[i];
-    return r.id === o.id && r.versionRange === o.versionRange && r.upstreamKind === o.upstreamKind && r.upstream === o.upstream && r.upstreamName === o.upstreamName;
+    return r.id === o.id && r.position === o.position && r.versionRange === o.versionRange && r.upstreamKind === o.upstreamKind && r.upstream === o.upstream && r.upstreamName === o.upstreamName;
   });
 }
 

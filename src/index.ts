@@ -720,7 +720,10 @@ async function applyOne(c: Awaited<ReturnType<typeof client>>, g: ReturnType<typ
   // Read it again now, not the preview's copy: with --all several packages
   // can share one README (the repository root's), and each badge has to go
   // on top of the ones written just before it.
-  const source = await fs.readFile(file, 'utf8').catch(() => null);
+  const source = await fs.readFile(file, 'utf8').catch((err: NodeJS.ErrnoException) => {
+    if (err.code === 'ENOENT') return null;
+    throw err;
+  });
   const exists = source !== null;
   const bp = planBadge(source, name, plan.badge);
   if (bp.kind === 'present') {

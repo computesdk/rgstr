@@ -203,6 +203,21 @@ describe('rgstr claim files nothing until --yes', () => {
     expect(claimPosts()).toHaveLength(0);
   });
 
+  it('a README that cannot be read stops the run; nothing is overwritten', async () => {
+    if (process.getuid?.() === 0) return;
+    const dir = await pkgDir();
+    await fs.chmod(path.join(dir, 'README.md'), 0o200);
+    try {
+      const r = await rgstr(['claim', '--yes'], dir);
+      expect(r.code).not.toBe(0);
+      expect(r.stderr).toContain('EACCES');
+      await fs.chmod(path.join(dir, 'README.md'), 0o600);
+      expect(await fs.readFile(path.join(dir, 'README.md'), 'utf8')).toBe('# tsc-rs\n\nHello.\n');
+    } finally {
+      await fs.chmod(path.join(dir, 'README.md'), 0o600);
+    }
+  });
+
   it('--check never POSTs a claim', async () => {
     const dir = await pkgDir();
     await rgstr(['claim', '--check'], dir);
