@@ -233,10 +233,14 @@ describe('routes and setup: plan then apply', () => {
   it('pr: true is part of the claim plan, so apply can open the pull request', async () => {
     const client = await connect();
     const dir = await pkgDir();
+    // A temp dir is no git checkout: the plan says so instead of promising a pull request.
     const plan = await call(client, 'rgstr_claim_plan', { cwd: dir, pr: true });
-    expect(plan.structuredContent?.pr).toBe(true);
-    expect(textOf(plan)).toContain('open the badge pull request with gh');
-    expect((await call(client, 'rgstr_claim_plan', { cwd: dir })).structuredContent?.pr).toBe(false);
+    expect(plan.structuredContent?.pr).toBe(false);
+    expect(textOf(plan)).toContain('not a git checkout with an `origin` remote');
+    expect(textOf(plan)).not.toContain('open the badge pull request with gh');
+    const stored = await call(client, 'rgstr_claim_apply', { plan_id: plan.structuredContent?.plan_id });
+    expect(stored.isError).toBeFalsy();
+    expect(stored.structuredContent?.pr ?? null).toBeNull();
   });
 
   it('rgstr_claim_apply takes only a plan_id, and refuses when the README changed since the plan', async () => {
