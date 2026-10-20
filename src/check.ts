@@ -1,6 +1,6 @@
 // `rgstr check`: the install-time signal. npm and pip give a registry no way
 // to print during an install, so this reads the project's direct dependencies
-// and says, per name, what resolving through rgstr did: who holds it and
+// and says, per name, what resolving through rgstr did: who claims it and
 // where it is served from. Unclaimed names fall through to npm / PyPI
 // unchanged — the line says so rather than implying rgstr touched them.
 
@@ -245,9 +245,9 @@ export interface CheckRow {
   ecosystem: Ecosystem;
   trust: WhoisLike['trust'] | null;
   state: WhoisLike['state'] | null;
-  /** Org slug of the holder; null when nobody holds the name. */
+  /** Org slug of the claiming organization; null when nobody has claimed the name. */
   holder: string | null;
-  /** True when a holder's answer (routes or default) is what installs get. */
+  /** True when the claiming organization's answer (routes or default) is what installs get. */
   held: boolean;
   /** Where an install of this name is served from, in words. */
   servedFrom: string;
@@ -259,18 +259,18 @@ export interface CheckRow {
 
 const INDEX_LABEL: Record<Ecosystem, string> = { npm: 'npm', pypi: 'PyPI' };
 
-/** One dependency's line. `held` is true only when a holder's routes (or the
- *  holder's default) decide the install — never for a pending application. */
+/** One dependency's line. `held` is true only when the claiming organization's routes (or its
+ *  default) decide the install — never for a pending application. */
 export function checkRow(dep: Dependency, w: WhoisLike): CheckRow {
   const held = !!w.holder && w.trust !== 'unclaimed';
   const index = INDEX_LABEL[dep.ecosystem];
   let servedFrom: string;
   if (!held) servedFrom = `${index} (unchanged)`;
-  else if (w.routes.length === 0) servedFrom = `${index}:${w.name} (holder's default)`;
+  else if (w.routes.length === 0) servedFrom = `${index}:${w.name} (claimant's default)`;
   else {
     servedFrom = w.routes
       .map((r) => `${r.upstreamKind}:${r.upstreamName ?? w.name}${r.versionRange && r.versionRange !== '*' ? `@${r.versionRange}` : ''}`)
-      .join(', ') + ' (holder route)';
+      .join(', ') + ' (claimant route)';
   }
   return {
     name: dep.name,
@@ -289,16 +289,16 @@ export function unansweredRow(dep: Dependency, error: string): CheckRow {
   return { name: dep.name, ecosystem: dep.ecosystem, trust: null, state: null, holder: null, held: false, servedFrom: `${INDEX_LABEL[dep.ecosystem]} (unchanged)`, routes: [], url: null, error };
 }
 
-/** The last line: how many names a holder decides, and that the rest are untouched. */
+/** The last line: how many names a claimant decides, and that the rest are untouched. */
 export function summaryLine(rows: CheckRow[]): string {
   const held = rows.filter((r) => r.held).length;
   const total = rows.length;
   const names = (n: number) => `${n} name${n === 1 ? '' : 's'}`;
   if (total === 0) return 'No names to check.';
   const indexes = [...new Set(rows.map((r) => INDEX_LABEL[r.ecosystem]))].join(' / ');
-  if (held === total) return `${held} of ${total} ${total === 1 ? 'name is' : 'names are'} held on rgstr; every install here resolves where its holder says.`;
-  if (held === 0) return `0 of ${names(total)} ${total === 1 ? 'is' : 'are'} held on rgstr; all of them fall through to ${indexes} unchanged.`;
-  return `${held} of ${total} names are held on rgstr; the rest fall through to ${indexes} unchanged.`;
+  if (held === total) return `${held} of ${total} ${total === 1 ? 'name is' : 'names are'} claimed on rgstr; every install here resolves where its claimant says.`;
+  if (held === 0) return `0 of ${names(total)} ${total === 1 ? 'is' : 'are'} claimed on rgstr; all of them fall through to ${indexes} unchanged.`;
+  return `${held} of ${total} names are claimed on rgstr; the rest fall through to ${indexes} unchanged.`;
 }
 
 /** Rows as the table the human output prints. */

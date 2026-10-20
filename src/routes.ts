@@ -1,4 +1,4 @@
-// `rgstr route`: holder routing over /api/v1/packages/:id/routes (GET + PUT
+// `rgstr route`: claimant routing over /api/v1/packages/:id/routes (GET + PUT
 // of the full list). Specs read like install specs: `npm:tsc-rs@^0.7`,
 // `jsr:@scope/pkg@^1`, `pypi:name@>=1`.
 

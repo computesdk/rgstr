@@ -132,7 +132,7 @@ program
         // An organization key names its organization itself; confirm it works with a cheap authed read.
         const claims = await c.get<{ held: Array<{ name: string }> }>('/api/v1/registry/claims');
         if (globals().json) printJson({ ...base, held: claims.held.length });
-        else console.log(kv([['auth', 'organization API key'], ['base', c.baseUrl], ['organization', c.auth.org ?? '(from key)'], ['names held', String(claims.held.length)]]));
+        else console.log(kv([['auth', 'organization API key'], ['base', c.baseUrl], ['organization', c.auth.org ?? '(from key)'], ['names claimed', String(claims.held.length)]]));
         return;
       }
       const me = await c.get<MeResponse>('/api/v1/me');
@@ -230,7 +230,7 @@ async function useFlow(opts: UseOpts, ctx: { signedIn?: boolean } = {}): Promise
   for (const c of pending) console.log(`${c.file}: ${c.action === 'removed' ? 'removed the rgstr block' : 'written'} (${c.clients.join(', ')})`);
   if (opts.off) console.log('Installs go straight to npm / PyPI again.');
   else {
-    console.log(`Installs now resolve through ${origin}: names someone holds → the holder's routes; everything else → npm / PyPI, unchanged.`);
+    console.log(`Installs now resolve through ${origin}: names someone claims → that organization's routes; everything else → npm / PyPI, unchanged.`);
     console.log(`Undo with \`rgstr setup --off\` — it removes exactly the lines above and leaves ${pending.map((c) => c.file).join(', ')} as ${pending.length === 1 ? 'it was' : 'they were'}.`);
     if (!ctx.signedIn) console.log('Optional: `rgstr login` to sign in and apply your organization\'s rules; installs work without it.');
   }
@@ -330,7 +330,7 @@ program
 
 program
   .command('check [names...]')
-  .description('what resolving this project\'s dependencies through rgstr does: per name, who holds it and where it is served from')
+  .description('what resolving this project\'s dependencies through rgstr does: per name, who claims it and where it is served from')
   .action(async (names: string[]) => {
     try {
       const g = globals();
@@ -412,7 +412,7 @@ program
         return;
       }
       console.log('');
-      console.log(table(checkTableRows(rows), ['name', 'trust', 'holder', 'served from']));
+      console.log(table(checkTableRows(rows), ['name', 'trust', 'claimed by', 'served from']));
       console.log('');
       console.log(summary);
       for (const n of notes) console.log(n);
@@ -470,8 +470,8 @@ async function checkOne(c: Awaited<ReturnType<typeof client>>, g: ReturnType<typ
     const held = list.held.find((h) => h.name === name);
     const whois = await c.get<WhoisResponse>(`/api/v1/registry/whois/${encodeURIComponent(name)}`);
     if (g.json) return { name, checked: false, held: held ?? null, whois };
-    if (held?.status === 'verified') console.log(`${name}: verified — your organization holds it. ${whois.url}`);
-    else if (whois.holder) console.log(`${name}: held by ${whois.holder.name} (${whois.holder.slug}) — file a claim with \`rgstr claim\` to dispute it.`);
+    if (held?.status === 'verified') console.log(`${name}: verified — your organization claims it. ${whois.url}`);
+    else if (whois.holder) console.log(`${name}: claimed by ${whois.holder.name} (${whois.holder.slug}) — file a claim with \`rgstr claim\` to dispute it.`);
     else console.log(`${name}: no application from your organization yet — run \`rgstr claim ${name}\` first.`);
     return { name, checked: false, held: held ?? null, whois };
   }
@@ -481,7 +481,7 @@ async function checkOne(c: Awaited<ReturnType<typeof client>>, g: ReturnType<typ
   const o = res.outcome;
   if (o.kind === 'verified') {
     console.log(`${name}: verified via ${proofKindLabel({ name, ...o })} — ${o.detail}`);
-    console.log(o.autoApproved ? `Approved: your organization now holds ${name}.` : `Proof verified and attached to your application; ${o.reviewReason ?? 'an rgstr reviewer decides'}.`);
+    console.log(o.autoApproved ? `Approved: your organization now claims ${name}.` : `Proof verified and attached to your application; ${o.reviewReason ?? 'an rgstr reviewer decides'}.`);
   } else if (o.kind === 'not_found') {
     const repo = o.repoUrl ?? pending.repoUrl ?? null;
     const where = [o.checked.length ? o.checked.join(', ') : 'npm, PyPI', repo ? `the README of ${repo}` : null].filter(Boolean).join(' and ');
@@ -554,7 +554,7 @@ async function claimOne(
     : null;
 
   say(alreadyPending ? `${name}: already under review (${claim.request.id.slice(0, 8)}).` : `Filed: ${name} (${claim.url})`);
-  if (claim.dispute) say(`Held by ${claim.dispute.holder} via ${claim.dispute.via} — this is a dispute; a reviewer decides.`);
+  if (claim.dispute) say(`Claimed by ${claim.dispute.holder} via ${claim.dispute.via} — this is a dispute; a reviewer decides.`);
 
   const out: ClaimOutcome = { name, ecosystem, claim, alreadyPending, repoUrl, plan, readme: null };
   if (!plan) {
@@ -756,7 +756,7 @@ interface WhoisResponse {
 
 program
   .command('whois <name>')
-  .description('who holds a name, how much to trust it, and where it routes')
+  .description('who claims a name, how much to trust it, and where it routes')
   .action(async (name: string) => {
     try {
       const c = await client(true);
@@ -774,7 +774,7 @@ program
         kv([
           ['name', w.name],
           ['trust', w.trust + (w.state === 'disputed' ? ' (disputed — an application is under review)' : w.state === 'pending' ? ' (application pending)' : '')],
-          ['holder', w.holder ? `${w.holder.name} (${w.holder.slug}) ${w.holder.url}${w.holder.via !== w.name ? ` via ${w.holder.via}` : ''}` : 'nobody'],
+          ['claimed by', w.holder ? `${w.holder.name} (${w.holder.slug}) ${w.holder.url}${w.holder.via !== w.name ? ` via ${w.holder.via}` : ''}` : 'nobody'],
           ['routes', routes],
           ['hidden', w.hiddenCopies ? `${w.hiddenCopies} copies hidden under this name` : null],
           ['page', w.url],
@@ -796,13 +796,13 @@ interface OrgPackage {
 async function heldPackage(c: RgstrClient, name: string): Promise<OrgPackage> {
   const res = await c.get<{ packages: OrgPackage[] }>('/api/v1/packages');
   const pkg = res.packages.find((p) => p.name === name);
-  if (!pkg) throw new RgstrCliError('not_holder', `${c.auth.org ?? 'Your organization'} does not hold ${name} — see \`rgstr whois ${name}\`.`);
+  if (!pkg) throw new RgstrCliError('not_holder', `${c.auth.org ?? 'Your organization'} has not claimed ${name} — see \`rgstr whois ${name}\`.`);
   return pkg;
 }
 
 program
   .command('route <name>')
-  .description('list, add (--to) or remove (--rm) upstream routes for a name you hold')
+  .description('list, add (--to) or remove (--rm) upstream routes for a name you claim')
   .option('--to <spec>', 'add a route, e.g. npm:tsc-rs@^0.7 or jsr:@scope/pkg@^1')
   .option('--rm <id>', 'remove a route by id (prefix ok)')
   .action(async (name: string, opts: { to?: string; rm?: string }) => {

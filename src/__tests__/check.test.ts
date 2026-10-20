@@ -111,36 +111,36 @@ describe('rows and the summary line', () => {
     expect(checkTableRows([pending])[0]).toEqual(['requests', 'unclaimed (application pending)', '—', 'PyPI (unchanged)']);
   });
 
-  it('held names name the holder and where the holder serves them from', () => {
+  it('claimed names name the claimant and where it serves them from', () => {
     const holder = { name: 'ComputeSDK', slug: 'computesdk' };
     expect(checkRow(dep('computesdk'), whois('computesdk', { trust: 'claimed', state: 'held', holder }))).toMatchObject({
       held: true,
       holder: 'computesdk',
-      servedFrom: "npm:computesdk (holder's default)",
+      servedFrom: "npm:computesdk (claimant's default)",
     });
     const routed = checkRow(dep('tsc'), whois('tsc', { trust: 'verified', state: 'held', holder, routes: [route('tsc-rs', '^0.7'), route('tsc-rs', '*', 'jsr')] }));
-    expect(routed.servedFrom).toBe('npm:tsc-rs@^0.7, jsr:tsc-rs (holder route)');
+    expect(routed.servedFrom).toBe('npm:tsc-rs@^0.7, jsr:tsc-rs (claimant route)');
     expect(routed.routes[0]).toEqual({ versionRange: '^0.7', upstreamKind: 'npm', upstream: 'https://registry.npmjs.org', upstreamName: 'tsc-rs' });
     const disputed = checkRow(dep('zod'), whois('zod', { trust: 'claimed', state: 'disputed', holder }));
     expect(checkTableRows([disputed])[0][1]).toBe('claimed (disputed)');
   });
 
-  it('an unanswered name shows the reason and counts as not held', () => {
+  it('an unanswered name shows the reason and counts as not claimed', () => {
     const row = unansweredRow(dep('Bad Name'), 'Invalid package name');
     expect(row).toMatchObject({ held: false, trust: null, servedFrom: 'npm (unchanged)', error: 'Invalid package name' });
     expect(checkTableRows([row])[0][1]).toBe('? (Invalid package name)');
   });
 
-  it('summary: held count out of total, and that the rest are untouched', () => {
+  it('summary: claimed count out of total, and that the rest are untouched', () => {
     const holder = { name: 'ComputeSDK', slug: 'computesdk' };
     const held = checkRow(dep('computesdk'), whois('computesdk', { trust: 'claimed', state: 'held', holder }));
     const npmFree = checkRow(dep('react'), whois('react'));
     const pyFree = checkRow(dep('requests', 'pypi'), whois('requests'));
-    expect(summaryLine([held, npmFree, pyFree])).toBe('1 of 3 names are held on rgstr; the rest fall through to npm / PyPI unchanged.');
-    expect(summaryLine([held, npmFree])).toBe('1 of 2 names are held on rgstr; the rest fall through to npm unchanged.');
-    expect(summaryLine([npmFree, pyFree])).toBe('0 of 2 names are held on rgstr; all of them fall through to npm / PyPI unchanged.');
-    expect(summaryLine([npmFree])).toBe('0 of 1 name is held on rgstr; all of them fall through to npm unchanged.');
-    expect(summaryLine([held])).toBe('1 of 1 name is held on rgstr; every install here resolves where its holder says.');
+    expect(summaryLine([held, npmFree, pyFree])).toBe('1 of 3 names are claimed on rgstr; the rest fall through to npm / PyPI unchanged.');
+    expect(summaryLine([held, npmFree])).toBe('1 of 2 names are claimed on rgstr; the rest fall through to npm unchanged.');
+    expect(summaryLine([npmFree, pyFree])).toBe('0 of 2 names are claimed on rgstr; all of them fall through to npm / PyPI unchanged.');
+    expect(summaryLine([npmFree])).toBe('0 of 1 name is claimed on rgstr; all of them fall through to npm unchanged.');
+    expect(summaryLine([held])).toBe('1 of 1 name is claimed on rgstr; every install here resolves where its claimant says.');
     expect(summaryLine([])).toBe('No names to check.');
   });
 });
