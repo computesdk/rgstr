@@ -75,11 +75,17 @@ No login needed.
    `--pip`) writes the rgstr registry line to the project's `.npmrc` (and
    yarn / bun config) or the virtualenv's `pip.conf` (uv / poetry). Without
    `--yes` it shows the diff and ends with `Nothing written. Re-run with --yes
-   to apply.`
-2. `npx @rgstr/cli@latest check` prints one row per direct dependency
-   (`name | trust | claimed by | served from`), then `N of M names are
-   claimed on rgstr; the rest fall through to npm / PyPI unchanged.`
-   `check <name…>` checks names with no project. Exit 0 whenever it ran.
+   to apply.` `--pip` with no active virtualenv, `.venv`, uv or poetry
+   lockfile writes nothing: it prints a `pip config set global.index-url …`
+   command for the user to run, and `check` stays `not_configured` until
+   one of those exists.
+2. In that project, `npx @rgstr/cli@latest check` prints one row per direct
+   dependency (`name | trust | claimed by | served from`), then `N of M names
+   are claimed on rgstr; the rest fall through to npm / PyPI unchanged.`
+   `check <name…>` limits the rows to those names; it still needs the
+   project `setup` configured (otherwise it exits `not_configured`). To look
+   up a name with no project, use `whois` (section 3). Exit 0 whenever it
+   ran.
 3. `npx @rgstr/cli@latest setup --off --yes` removes exactly what `setup`
    wrote; installs go straight to npm / PyPI again.
 
