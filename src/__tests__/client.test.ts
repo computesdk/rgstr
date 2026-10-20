@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { RgstrClient, RgstrCliError, isSecureTransport, isTrustedHost, resolveAuth } from '../client.js';
 import { deviceLogin, discoverAuthServer, oauthClients, requestDeviceCode } from '../auth.js';
-import { parseRouteSpec } from '../routes.js';
+import { parseRouteSpec, sameRoutes, type RouteRecord } from '../routes.js';
 
 const ENV = ['RGSTR_TOKEN', 'RGSTR_ORG', 'RGSTR_URL', 'RGSTR_HOME'] as const;
 const saved: Record<string, string | undefined> = {};
@@ -194,5 +194,18 @@ describe('login scopes', () => {
     }) as unknown as typeof fetch;
     await expect(deviceLogin({ baseUrl: 'https://rgstr.org', fetchImpl: flaky })).rejects.toThrow(/db down/);
     expect(asked).toEqual(['rgstr-cli']);
+  });
+});
+
+describe('sameRoutes', () => {
+  const a: RouteRecord = { id: 'r1', versionRange: '*', upstreamKind: 'npm', upstream: 'https://registry.npmjs.org', upstreamName: null, position: 0 };
+  const b: RouteRecord = { ...a, id: 'r2', versionRange: '^1', upstreamName: 'other', position: 1 };
+  it('is true for the same list and false once anything differs', () => {
+    expect(sameRoutes([a, b], [{ ...a }, { ...b }])).toBe(true);
+    expect(sameRoutes([a, b], [a])).toBe(false);
+    expect(sameRoutes([a, b], [b, a])).toBe(false);
+    expect(sameRoutes([a], [{ ...a, upstreamName: 'x' }])).toBe(false);
+    expect(sameRoutes([a], [{ ...a, id: 'r9' }])).toBe(false);
+    expect(sameRoutes([], [])).toBe(true);
   });
 });

@@ -23,6 +23,7 @@ let server: http.Server;
 let base: string;
 let hits: Hit[] = [];
 let pending: Array<Record<string, unknown>> = [];
+let declaredRepo: Record<string, string> = {};
 
 beforeAll(async () => {
   await fs.access(CLI).catch(() => {
@@ -50,7 +51,10 @@ beforeAll(async () => {
       if (req.method === 'GET' && url.pathname.startsWith('/api/v1/registry/whois/')) {
         return json(200, { name: decodeURIComponent(url.pathname.split('/').pop()!), url: `${base}/registry/x`, trust: 'unclaimed', state: 'unclaimed', holder: null, routes: [], hiddenCopies: null });
       }
-      if (req.method === 'GET' && url.pathname.startsWith('/api/registry/')) return json(404, { error: 'not found' });
+      if (req.method === 'GET' && url.pathname.startsWith('/api/registry/')) {
+        const name = decodeURIComponent(url.pathname.slice('/api/registry/'.length));
+        return declaredRepo[name] ? json(200, { repository: { url: declaredRepo[name] } }) : json(404, { error: 'not found' });
+      }
       if (req.method === 'GET' && url.pathname === '/api/v1/packages') return json(200, { packages: [{ id: 'pkg-1', name: 'tsc-rs', status: 'verified' }] });
       if (url.pathname === '/api/v1/packages/pkg-1/routes') {
         if (req.method === 'GET') return json(200, { routes: [{ id: 'route-1', versionRange: '*', upstreamKind: 'npm', upstream: 'https://registry.npmjs.org', upstreamName: null, position: 0 }] });
@@ -69,6 +73,7 @@ afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
 beforeEach(() => {
   hits = [];
   pending = [];
+  declaredRepo = {};
 });
 
 async function pkgDir(readme = '# tsc-rs\n\nHello.\n'): Promise<string> {
@@ -158,6 +163,43 @@ describe('rgstr claim files nothing until --yes', () => {
     expect(writes()).toHaveLength(0);
     const yes = await rgstr(['claim', '--yes'], dir);
     expect(yes.stdout).toContain('README.md: written');
+    expect(claimPosts()).toHaveLength(0);
+  });
+
+  it('--all with packages that share the repository README: every badge ends up in it', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rgstr-ws-'));
+    await run('git', ['init', '-q'], { cwd: root });
+    await run('git', ['remote', 'add', 'origin', 'https://github.com/acme/mono.git'], { cwd: root });
+    await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({ name: 'mono', private: true, workspaces: ['packages/*'] }));
+    await fs.writeFile(path.join(root, 'README.md'), '# mono\n\nTwo packages.\n');
+    for (const n of ['one', 'two']) {
+      await fs.mkdir(path.join(root, 'packages', n), { recursive: true });
+      await fs.writeFile(path.join(root, 'packages', n, 'package.json'), JSON.stringify({ name: n, version: '1.0.0' }));
+      declaredRepo[n] = 'git+https://github.com/acme/mono.git';
+    }
+    const preview = await rgstr(['claim', '--all'], root);
+    expect(preview.code).toBe(0);
+    expect(claimPosts()).toHaveLength(0);
+    expect(await fs.readFile(path.join(root, 'README.md'), 'utf8')).toBe('# mono\n\nTwo packages.\n');
+    const r = await rgstr(['claim', '--all', '--yes'], root);
+    expect(r.code).toBe(0);
+    expect(claimPosts().map((h) => (h.body as { name: string }).name)).toEqual(['one', 'two']);
+    const readme = await fs.readFile(path.join(root, 'README.md'), 'utf8');
+    expect(readme).toContain('/registry/one/badge.svg?proof=');
+    expect(readme).toContain('/registry/two/badge.svg?proof=');
+    expect(readme).toContain('Two packages.');
+  });
+
+  it('a namespace (@scope) has no badge: the plan promises no README write', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'rgstr-empty-'));
+    const preview = await rgstr(['claim', '@acme'], dir);
+    expect(preview.code).toBe(0);
+    expect(preview.stdout).toContain('Files the claim: @acme is a namespace — reviewed on identity + evidence, there is no badge to publish.');
+    expect(preview.stdout).toContain('Re-run with --yes to file the claim for @acme as acme.');
+    expect(preview.stdout).not.toContain('badge.svg');
+    expect(preview.stdout).not.toContain('will add');
+    const doc = JSON.parse((await rgstr(['--json', 'claim', '@acme'], dir)).stdout);
+    expect(doc).toMatchObject({ name: '@acme', applied: false, readme: { action: 'none', reason: 'namespace claim' } });
     expect(claimPosts()).toHaveLength(0);
   });
 
