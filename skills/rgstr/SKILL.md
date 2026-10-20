@@ -56,8 +56,10 @@ confirmation) and prints the badge for the user to add by hand.
    Merge it, then: rgstr claim --check <name>`.
 4. Once the badge is on the default branch (pull request merged), or shipped
    in a publish with `--here`, `npx @rgstr/cli@latest claim --check <name>`
-   looks for the proof (read-only): `<name>: verified via …` means it is in;
-   until then `<name>: no proof found yet (checked …)`.
+   looks for the proof. It files nothing new and writes no files, but it
+   records the proof for the claim the user already confirmed, which can
+   complete that claim: `<name>: verified via …` means it is in; until then
+   `<name>: no proof found yet (checked …)`.
 5. A person reviews the claim. The name goes unclaimed → under review →
    claimed; `npx @rgstr/cli@latest whois <name>` shows where it is.
 
