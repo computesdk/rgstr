@@ -1,5 +1,14 @@
 # @rgstr/cli
 
+## 0.0.10
+
+### Patch Changes
+
+- 309181e: `rgstr claim` no longer files a claim until you confirm or pass --yes: it shows what it will file and the README diff, asks y/N, and files + writes only on yes (`--yes` skips the question; `--json` and non-interactive runs report the plan and do nothing without `--yes`). `rgstr route --to/--rm` shows the routes as they would be and asks the same way (`--yes` to skip).
+- 6113bae: `rgstr claim` stops on a README it cannot read instead of writing over it; `rgstr route` also treats a changed route order as a change.
+- b960988: `rgstr claim --all` keeps every badge when packages share one README; `rgstr route` refuses to apply when the routes changed while the question was open; `rgstr claim @scope` says up front that a namespace has no badge to publish.
+- 80c9886: `rgstr claim --pr` branches from the remote default branch, so the badge PR applies cleanly
+
 ## 0.0.9
 
 ### Patch Changes
