@@ -17,7 +17,8 @@ export type RgstrCliErrorCode =
   | 'invalid_argument'
   | 'not_found'
   | 'not_holder'
-  | 'not_configured';
+  | 'not_configured'
+  | 'conflict';
 
 export class RgstrCliError extends Error {
   constructor(

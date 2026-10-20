@@ -23,7 +23,7 @@ import {
 import { fmtDownloads, kv, printJson, table } from './output.js';
 import type { Ecosystem } from './project.js';
 import { chooseTargets, detectPackages, gitCheckout, nextSteps, openBadgePr, planBadge, readmeFor, sameRepo, shortRepo, workspaceGlobs, type GitCheckout, type PackageTarget } from './readme.js';
-import { formatRouteRow, parseRouteSpec, type RouteInput, type RouteRecord } from './routes.js';
+import { formatRouteRow, parseRouteSpec, sameRoutes, type RouteInput, type RouteRecord } from './routes.js';
 import { applyUse, planUse, projectStatus, unifiedDiff, type UseChange } from './use.js';
 import { confirm, isInteractive } from './prompt.js';
 import { badgeMarkdown, buildClaimPlan, describeRepo, fetchRepoUrl, proofKindLabel, renderClaimPlan, repoDirectoryFrom, type ProofSightingLike } from './claim.js';
@@ -541,6 +541,11 @@ function originOf(c: RgstrClient, claim: ClaimResponse | null): string {
   }
 }
 
+/** `@scope` alone: the namespace, not a package in it. */
+function isNamespace(name: string, ecosystem: Ecosystem): boolean {
+  return ecosystem === 'npm' && /^@[^/]+$/.test(name);
+}
+
 function planFor(c: RgstrClient, claim: ClaimResponse, t: ClaimTarget, repoUrl: string | null) {
   if (!claim.proof) return null;
   const origin = originOf(c, claim);
@@ -578,7 +583,12 @@ async function previewOne(
   const pendingRecord = list.pending.find((p) => p.name === name);
   const pending = pendingRecord ? claimFromPending(c, pendingRecord) : null;
   if (pending) say(`${name}: already under review (${pending.request.id.slice(0, 8)}) — nothing to file.`);
-  else say(`Files the claim: ${name} goes under review until the badge is in a README rgstr reads.`);
+  else if (isNamespace(name, ecosystem)) {
+    // No proof token is issued for a namespace, so there is no badge to
+    // preview — promising a README write here would not be kept.
+    say(`Files the claim: ${name} is a namespace — reviewed on identity + evidence, there is no badge to publish.`);
+    return { t, verified: false, pending, repoUrl: null, readme: null, outcome: { file: 'README.md', action: 'none', reason: 'namespace claim' } };
+  } else say(`Files the claim: ${name} goes under review until the badge is in a README rgstr reads.`);
 
   const repoUrl = pending?.repoUrl ?? (await fetchRepoUrl(originOf(c, pending), name, ecosystem));
   const plan = pending ? planFor(c, pending, t, repoUrl) : null;
@@ -706,7 +716,12 @@ async function applyOne(c: Awaited<ReturnType<typeof client>>, g: ReturnType<typ
     return out;
   }
   if (!p.readme.write) return out;
-  const { file, rel, exists, source } = p.readme;
+  const { file, rel } = p.readme;
+  // Read it again now, not the preview's copy: with --all several packages
+  // can share one README (the repository root's), and each badge has to go
+  // on top of the ones written just before it.
+  const source = await fs.readFile(file, 'utf8').catch(() => null);
+  const exists = source !== null;
   const bp = planBadge(source, name, plan.badge);
   if (bp.kind === 'present') {
     out.readme = { file: rel, action: 'present', line: bp.old.line };
@@ -983,6 +998,13 @@ program
             return;
           }
           console.log('');
+          // The PUT replaces the whole list, and someone else may have
+          // changed it while the question was open — apply only to the list
+          // the plan was shown for.
+          const now = (await c.get<{ routes: RouteRecord[] }>(path)).routes;
+          if (!sameRoutes(now, current)) {
+            throw new RgstrCliError('conflict', `${name}'s routes changed while the question was open — nothing changed here. Re-run to see the current list.`);
+          }
         }
         routes = (await c.put<{ routes: RouteRecord[] }>(path, { routes: next })).routes;
       }
