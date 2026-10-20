@@ -54,6 +54,20 @@ yours. No release, no OAuth scopes. `rgstr claim <name>` anywhere else prints
 the badge and a one-paragraph prompt your coding agent can take verbatim (after
 you confirm the filing, or with `--yes`).
 
+## Agents
+
+rgstr ships as an agent skill — the same plan → confirm → `--yes` rules, written
+for a coding agent:
+
+```bash
+npx skills add computesdk/rgstr --skill rgstr
+```
+
+The file is [`skills/rgstr/SKILL.md`](./skills/rgstr/SKILL.md) (where the
+[skills CLI](https://skills.sh/docs/cli) looks for it); rgstr.org serves the
+same file at https://rgstr.org/skills/rgstr/SKILL.md and links it from
+https://rgstr.org/llms.txt.
+
 ## For CI
 
 ```bash
