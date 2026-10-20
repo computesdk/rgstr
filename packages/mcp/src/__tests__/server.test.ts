@@ -230,6 +230,15 @@ describe('routes and setup: plan then apply', () => {
     expect(await fs.readFile(path.join(dir, '.npmrc'), 'utf8')).toContain(`registry=${BASE}/api/registry`);
   });
 
+  it('pr: true is part of the claim plan, so apply can open the pull request', async () => {
+    const client = await connect();
+    const dir = await pkgDir();
+    const plan = await call(client, 'rgstr_claim_plan', { cwd: dir, pr: true });
+    expect(plan.structuredContent?.pr).toBe(true);
+    expect(textOf(plan)).toContain('open the badge pull request with gh');
+    expect((await call(client, 'rgstr_claim_plan', { cwd: dir })).structuredContent?.pr).toBe(false);
+  });
+
   it('rgstr_claim_apply takes only a plan_id, and refuses when the README changed since the plan', async () => {
     const client = await connect();
     const dir = await pkgDir();

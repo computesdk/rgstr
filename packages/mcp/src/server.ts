@@ -196,6 +196,7 @@ export function createServer(options: ServerOptions = {}, version = '0.0.0'): Mc
     npm: z.boolean().optional().describe('Treat the package as npm.'),
     pip: z.boolean().optional().describe('Treat the package as PyPI.'),
     statement: z.string().optional().describe('A sentence for the reviewer (when the name is claimed by another organization).'),
+    pr: z.boolean().optional().describe('Part of the plan: after writing the badge, branch, commit, push and open the pull request with gh. Shown in the plan; rgstr_claim_apply does it.'),
   };
   type ClaimArgs = { cwd?: string; name?: string; all?: boolean; here?: boolean; npm?: boolean; pip?: boolean; statement?: string; pr?: boolean };
   const claimOpts = (a: ClaimArgs): ClaimOpts => ({ all: a.all, here: a.here, npm: a.npm, pip: a.pip, statement: a.statement, pr: a.pr });
@@ -234,13 +235,14 @@ export function createServer(options: ServerOptions = {}, version = '0.0.0'): Mc
         const { c, plan, lines, opts } = r;
         const body = [...lines];
         if (!plan.what) body.push('', 'Nothing to file, nothing to write: already under review or verified, and the badge is in place.');
-        else body.push('', `Nothing filed, nothing written — that is the plan. After the user confirms, call rgstr_claim_apply with plan_id to ${plan.what}.`);
+        else body.push('', `Nothing filed, nothing written — that is the plan. After the user confirms, call rgstr_claim_apply with plan_id to ${plan.what}${opts.pr && plan.toWrite.length ? ' and open the badge pull request with gh' : ''}.`);
         const plan_id = plan.what ? remember({ kind: 'claim', plan, opts, text: lines.join('\n'), asWho: c.auth.org, baseUrl: c.baseUrl, fingerprint: await claimFingerprint(plan) }) : null;
         return text(body, {
           plan_id,
           what: plan.what || null,
           toFile: plan.toFile,
           toWrite: plan.toWrite,
+          pr: !!(opts.pr && plan.toWrite.length),
           applied: false,
           packages: plan.previews.map((p) => previewJson(c, p)),
         });
