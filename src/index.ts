@@ -850,10 +850,12 @@ program
       const written = results.filter((r) => r.readme && (r.readme.action === 'written' || r.readme.action === 'replaced'));
       let pr: Awaited<ReturnType<typeof openBadgePr>> | null = null;
       if (written.length && checkout) {
-        const files = written.map((r) => path.resolve(dir, r.readme!.file));
         const names = written.map((r) => r.name);
         if (opts.pr && checkout.remote) {
-          pr = await openBadgePr(checkout, files, names);
+          pr = await openBadgePr(
+            checkout,
+            written.map((r) => ({ file: path.resolve(dir, r.readme!.file), name: r.name, badge: r.readme!.line! })),
+          );
           if (!g.json) {
             if (pr.url) console.log(`\nOpened ${pr.url} (branch ${pr.branch}). Merge it, then: ${names.map((n) => `rgstr claim --check ${n}`).join('; ')}`);
             else {

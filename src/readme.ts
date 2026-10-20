@@ -3,6 +3,7 @@
 // badge under the first heading. Pure helpers here; the command drives them.
 
 import { promises as fs } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -279,6 +280,11 @@ export function existingBadge(source: string, name: string): BadgeSighting | nul
   return m ? { line: m[0], token: m[1] ?? null } : null;
 }
 
+/** Any rgstr badge line, whatever the name or host. */
+export function isBadgeLine(line: string): boolean {
+  return /^\[!\[rgstr\]\([^)\s]*\/badge\.svg[^)]*\)\]\([^)]*\)\s*$/.test(line);
+}
+
 export type BadgePlan =
   | { kind: 'insert'; next: string }
   | { kind: 'replace'; next: string; old: BadgeSighting }
@@ -296,7 +302,14 @@ export function planBadge(source: string | null, name: string, badge: string): B
   const lines = source.split('\n');
   const h1 = lines.findIndex((l) => /^#\s/.test(l));
   if (h1 === -1) return { kind: 'insert', next: `${badge}\n\n${source}` };
-  lines.splice(h1 + 1, 0, '', badge);
+  // Badges for other names already under the heading: this one goes on the
+  // line below them, so two badge pull requests do not fight over one line.
+  let j = h1 + 1;
+  while (j < lines.length && lines[j].trim() === '') j++;
+  if (j < lines.length && isBadgeLine(lines[j])) {
+    while (j < lines.length && isBadgeLine(lines[j])) j++;
+    lines.splice(j, 0, badge);
+  } else lines.splice(h1 + 1, 0, '', badge);
   return { kind: 'insert', next: lines.join('\n') };
 }
 
@@ -320,14 +333,39 @@ export interface PrResult {
   reason?: string;
 }
 
-/** `--pr`: branch, commit, push, `gh pr create`. Returns url=null with a
- *  reason when gh is missing or not signed in; nothing is committed then. */
-export async function openBadgePr(
-  checkout: GitCheckout,
-  files: string[],
-  names: string[],
-  exec: typeof run = run,
-): Promise<PrResult> {
+/** One README the badge goes in, for `--pr`. */
+export interface BadgeEdit {
+  file: string;
+  name: string;
+  badge: string;
+}
+
+/** The remote's default branch: `origin/HEAD` when the clone knows it, else
+ *  `gh`, else the remote itself; `main` as the last resort. */
+export async function defaultBranch(root: string, exec: typeof run = run): Promise<string> {
+  const out = async (cmd: string, args: string[]) => {
+    try {
+      return (await exec(cmd, args, { cwd: root })).stdout.trim();
+    } catch {
+      return '';
+    }
+  };
+  const head = await out('git', ['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD']);
+  if (head.startsWith('origin/')) return head.slice('origin/'.length);
+  const gh = await out('gh', ['repo', 'view', '--json', 'defaultBranchRef', '-q', '.defaultBranchRef.name']);
+  if (gh) return gh;
+  const remote = await out('git', ['ls-remote', '--symref', 'origin', 'HEAD']);
+  const m = remote.match(/^ref: refs\/heads\/(\S+)\tHEAD/m);
+  return m ? m[1] : 'main';
+}
+
+/** `--pr`: branch from the remote's default branch (fetched now, never the
+ *  clone's local branch), put the badges into *that* README, commit, push,
+ *  `gh pr create`. Works in a temporary worktree, so the checkout the user is
+ *  in is not switched. Returns url=null with a reason when gh is missing or
+ *  not signed in; nothing is committed then. */
+export async function openBadgePr(checkout: GitCheckout, edits: BadgeEdit[], exec: typeof run = run): Promise<PrResult> {
+  const names = edits.map((e) => e.name);
   const branch = names.length === 1 ? `rgstr-badge-${names[0].replace(/[^A-Za-z0-9._-]+/g, '-')}` : 'rgstr-badges';
   const git = (...args: string[]) => exec('git', args, { cwd: checkout.root });
   try {
@@ -339,14 +377,42 @@ export async function openBadgePr(
   const list = names.map((n) => `\`${n}\``).join(', ');
   const checks = names.map((n) => `rgstr claim --check ${n}`).join('; ');
   const body = `Proves ownership of ${list} on rgstr: rgstr reads the badge off the README on GitHub, so no release is needed. After merging, run \`${checks}\`.`;
-  await git('checkout', '-b', branch);
-  await git('add', '--', ...files);
-  // Only the READMEs: anything else already staged stays out of this commit.
-  await git('commit', '-m', names.length === 1 ? 'Add rgstr badge' : 'Add rgstr badges', '--', ...files);
-  await git('push', '-u', 'origin', branch);
-  const { stdout } = await exec('gh', ['pr', 'create', '--title', names.length === 1 ? 'Add rgstr badge' : 'Add rgstr badges', '--body', body, '--head', branch], { cwd: checkout.root });
-  const url = stdout.trim().split('\n').find((l) => /^https?:\/\//.test(l)) ?? stdout.trim();
-  return { url, branch };
+  const title = names.length === 1 ? 'Add rgstr badge' : 'Add rgstr badges';
+
+  await git('fetch', 'origin');
+  const base = await defaultBranch(checkout.root, exec);
+  const worktree = await fs.mkdtemp(path.join(os.tmpdir(), 'rgstr-badge-'));
+  try {
+    await git('worktree', 'add', '--detach', worktree, `origin/${base}`);
+    const wt = (...args: string[]) => exec('git', args, { cwd: worktree });
+    const changed: string[] = [];
+    for (const e of edits) {
+      const rel = path.relative(checkout.root, e.file).split(path.sep).join('/');
+      if (rel.startsWith('..') || path.isAbsolute(rel)) throw new Error(`${e.file} is outside ${checkout.root}`);
+      const target = path.join(worktree, rel);
+      const source = await fs.readFile(target, 'utf8').catch((err: NodeJS.ErrnoException) => {
+        if (err.code === 'ENOENT') return null;
+        throw err;
+      });
+      const bp = planBadge(source, e.name, e.badge);
+      if (bp.kind === 'present') continue;
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      await fs.writeFile(target, bp.next);
+      changed.push(rel);
+    }
+    if (changed.length === 0) return { url: null, branch, reason: `origin/${base} already has the badge${names.length === 1 ? '' : 's'}` };
+    await wt('checkout', '-b', branch);
+    await wt('add', '--', ...changed);
+    // Only the READMEs: nothing else is in this worktree anyway.
+    await wt('commit', '-m', title, '--', ...changed);
+    await wt('push', '-u', 'origin', branch);
+    const { stdout } = await exec('gh', ['pr', 'create', '--title', title, '--body', body, '--head', branch, '--base', base], { cwd: worktree });
+    const url = stdout.trim().split('\n').find((l) => /^https?:\/\//.test(l)) ?? stdout.trim();
+    return { url, branch };
+  } finally {
+    await git('worktree', 'remove', '--force', worktree).catch(() => undefined);
+    await fs.rm(worktree, { recursive: true, force: true }).catch(() => undefined);
+  }
 }
 
 export { tomlProjectValue };
