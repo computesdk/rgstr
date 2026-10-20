@@ -203,10 +203,10 @@ describe('after the write', () => {
     expect(await openBadgePr(checkout, [{ file: '/work/ts-rust/README.md', name: 'tsc-rs', badge }], ok)).toEqual({ url: 'https://github.com/pingdotgg/ts-rust/pull/42', branch: 'rgstr-badge-tsc-rs' });
     expect(calls).toEqual([
       'gh auth status',
-      'git fetch origin',
-      'git symbolic-ref --quiet --short',
-      'gh repo view --json',
       'git ls-remote --symref origin',
+      'gh repo view --json',
+      'git symbolic-ref --quiet --short',
+      'git fetch origin main',
       'git worktree add --detach',
       'git checkout -b rgstr-badge-tsc-rs',
       'git add -- README.md',

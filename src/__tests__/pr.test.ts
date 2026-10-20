@@ -70,18 +70,51 @@ describe('rgstr claim --pr', () => {
     expect((await git(clone, 'worktree', 'list')).split('\n')).toHaveLength(1);
   });
 
-  it('finds the default branch from origin/HEAD, gh, or the remote', async () => {
+  it('a single-branch clone of another branch still branches from the default branch', async () => {
+    const { bare, seed } = await repos();
+    await git(seed, 'checkout', '-q', '-b', 'feature');
+    await fs.writeFile(path.join(seed, 'feature.txt'), 'f\n');
+    await git(seed, 'add', 'feature.txt');
+    await git(seed, 'commit', '-q', '-m', 'feature');
+    await git(seed, 'push', '-q', '-u', 'origin', 'feature');
+    const originMain = await git(bare, 'rev-parse', 'main');
+    const clone = path.join(path.dirname(bare), 'single');
+    await run('git', ['clone', '-q', '--single-branch', '-b', 'feature', bare, clone]);
+    await expect(git(clone, 'rev-parse', '--verify', 'origin/main')).rejects.toThrow();
+
+    const checkout = { root: clone, remote: 'https://github.com/acme/proj', branch: 'feature' };
+    const pr = await openBadgePr(checkout, [{ file: path.join(clone, 'README.md'), name: 'tsc-rs', badge: BADGE }], exec);
+    expect(pr.url).toBe('https://github.com/acme/proj/pull/7');
+    expect(await git(bare, 'rev-parse', 'rgstr-badge-tsc-rs^')).toBe(originMain);
+    expect(await git(clone, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('feature');
+  });
+
+  it('asks the remote for the default branch, so a rename is seen at once; gh and origin/HEAD are fallbacks', async () => {
     const { bare, clone, seed } = await repos();
     expect(await defaultBranch(clone, exec)).toBe('main');
-    await git(clone, 'remote', 'set-head', 'origin', '-d');
-    expect(await defaultBranch(clone, exec)).toBe('main');
-    const noGh = (async (cmd: string, args: string[], opts: { cwd: string }) => {
-      if (cmd === 'gh') throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
-      return run(cmd, args, opts);
-    }) as typeof run;
+    // Renamed on the remote after the clone: origin/HEAD and the fake gh still say main.
     await git(seed, 'branch', '-m', 'main', 'trunk');
     await git(seed, 'push', '-q', 'origin', 'trunk');
     await git(bare, 'symbolic-ref', 'HEAD', 'refs/heads/trunk');
-    expect(await defaultBranch(clone, noGh)).toBe('trunk');
+    expect(await git(clone, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD')).toBe('origin/main');
+    expect(await defaultBranch(clone, exec)).toBe('trunk');
+
+    const pr = await openBadgePr({ root: clone, remote: 'https://github.com/acme/proj', branch: 'main' }, [{ file: path.join(clone, 'README.md'), name: 'tsc-rs', badge: BADGE }], exec);
+    expect(pr.url).toBe('https://github.com/acme/proj/pull/7');
+    expect(await git(bare, 'rev-parse', 'rgstr-badge-tsc-rs^')).toBe(await git(bare, 'rev-parse', 'trunk'));
+
+    // No answer from the remote: gh, then origin/HEAD.
+    const noRemote = (async (cmd: string, args: string[], opts: { cwd: string }) => {
+      if (cmd === 'git' && args[0] === 'ls-remote') return { stdout: '', stderr: '' };
+      return exec(cmd, args, opts);
+    }) as typeof run;
+    expect(await defaultBranch(clone, noRemote)).toBe('main');
+    const nothing = (async (cmd: string, args: string[], opts: { cwd: string }) => {
+      if (cmd === 'gh' || args[0] === 'ls-remote') throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      return run(cmd, args, opts);
+    }) as typeof run;
+    expect(await defaultBranch(clone, nothing)).toBe('main');
+    await git(clone, 'remote', 'set-head', 'origin', '-d');
+    expect(await defaultBranch(clone, nothing)).toBe('main');
   });
 });

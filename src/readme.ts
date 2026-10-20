@@ -340,8 +340,9 @@ export interface BadgeEdit {
   badge: string;
 }
 
-/** The remote's default branch: `origin/HEAD` when the clone knows it, else
- *  `gh`, else the remote itself; `main` as the last resort. */
+/** The remote's default branch, asked of the remote itself (`ls-remote
+ *  --symref` sees a rename at once; `origin/HEAD` is set at clone time and
+ *  never refreshed by fetch), else `gh`, else `origin/HEAD`; `main` last. */
 export async function defaultBranch(root: string, exec: typeof run = run): Promise<string> {
   const out = async (cmd: string, args: string[]) => {
     try {
@@ -350,17 +351,18 @@ export async function defaultBranch(root: string, exec: typeof run = run): Promi
       return '';
     }
   };
-  const head = await out('git', ['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD']);
-  if (head.startsWith('origin/')) return head.slice('origin/'.length);
-  const gh = await out('gh', ['repo', 'view', '--json', 'defaultBranchRef', '-q', '.defaultBranchRef.name']);
-  if (gh) return gh;
   const remote = await out('git', ['ls-remote', '--symref', 'origin', 'HEAD']);
   const m = remote.match(/^ref: refs\/heads\/(\S+)\tHEAD/m);
-  return m ? m[1] : 'main';
+  if (m) return m[1];
+  const gh = await out('gh', ['repo', 'view', '--json', 'defaultBranchRef', '-q', '.defaultBranchRef.name']);
+  if (gh) return gh;
+  const head = await out('git', ['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD']);
+  if (head.startsWith('origin/')) return head.slice('origin/'.length);
+  return 'main';
 }
 
-/** `--pr`: branch from the remote's default branch (fetched now, never the
- *  clone's local branch), put the badges into *that* README, commit, push,
+/** `--pr`: branch from the remote's default branch (fetched now by name, never
+ *  the clone's local branch), put the badges into *that* README, commit, push,
  *  `gh pr create`. Works in a temporary worktree, so the checkout the user is
  *  in is not switched. Returns url=null with a reason when gh is missing or
  *  not signed in; nothing is committed then. */
@@ -379,11 +381,13 @@ export async function openBadgePr(checkout: GitCheckout, edits: BadgeEdit[], exe
   const body = `Proves ownership of ${list} on rgstr: rgstr reads the badge off the README on GitHub, so no release is needed. After merging, run \`${checks}\`.`;
   const title = names.length === 1 ? 'Add rgstr badge' : 'Add rgstr badges';
 
-  await git('fetch', 'origin');
   const base = await defaultBranch(checkout.root, exec);
+  // Fetch that branch by name and build on FETCH_HEAD: a single-branch clone
+  // has no `origin/<base>` ref and a plain fetch would not create one.
+  await git('fetch', 'origin', base);
   const worktree = await fs.mkdtemp(path.join(os.tmpdir(), 'rgstr-badge-'));
   try {
-    await git('worktree', 'add', '--detach', worktree, `origin/${base}`);
+    await git('worktree', 'add', '--detach', worktree, 'FETCH_HEAD');
     const wt = (...args: string[]) => exec('git', args, { cwd: worktree });
     const changed: string[] = [];
     for (const e of edits) {
