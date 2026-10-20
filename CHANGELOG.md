@@ -1,5 +1,11 @@
 # @rgstr/cli
 
+## 0.0.9
+
+### Patch Changes
+
+- 27c1053: Human-readable output says "claimed", never "held": `rgstr check` summary and "served from" notes, `rgstr whois`/`check` table headers, `claim`/`setup` messages and help text. JSON output is unchanged (`state: "held"`, `holder`, `held`).
+
 ## 0.0.8
 
 ### Patch Changes
