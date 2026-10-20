@@ -569,6 +569,14 @@ async function claimOne(
     if (claim.proofKinds?.length) console.log(`\nAccepted proofs: ${claim.proofKinds.join(', ')}.`);
   };
 
+  if (t.manifest === null) {
+    // `rgstr claim <name>` with no package here: there is no README of ours
+    // to edit, so the badge and the agent prompt are the deliverable.
+    printPlan();
+    out.readme = { file: 'README.md', action: 'none', reason: 'no package here' };
+    return out;
+  }
+
   // The README rgstr reads is where the badge goes: the folder the package
   // declares (else the repository root) when this checkout is that
   // repository; the package's own README with --here. Outside a checkout, or
@@ -578,7 +586,10 @@ async function claimOne(
   const here = ctx.checkout?.remote ?? null;
   const root = ctx.checkout?.root ?? t.dir;
   const matched = !!(declared && here && sameRepo(declared, here));
-  const declaredDir = !opts.here && matched ? repoDirectoryFrom(declared!) : undefined;
+  // No `origin` to compare: the checkout is taken to be the declared
+  // repository, so the badge still goes where rgstr reads it.
+  const assumed = !!declared && !!ctx.checkout && !here;
+  const declaredDir = !opts.here && (matched || assumed) ? repoDirectoryFrom(declared!) : undefined;
   const { file, exists, where } = await readmeFor({ ...t, manifest: t.manifest ?? '' }, root, opts.here ? false : ctx.single, declaredDir);
   const rel = path.relative(ctx.dir, file) || path.basename(file);
   const registry = ecosystem === 'npm' ? 'npm' : 'PyPI';
@@ -592,7 +603,7 @@ async function claimOne(
   if (!opts.here && declared && !ctx.checkout) {
     say(`\nNot a git checkout, so this folder cannot be matched to ${shortRepo(declared!)}, where rgstr reads the badge (its ${repoDirectoryFrom(declared!) ? `${repoDirectoryFrom(declared!)}/` : 'root '}README). The diff below is for ${rel} here; it counts once that line is in ${shortRepo(declared!)}'s README, or ships in the package README.`);
   } else if (!opts.here && declared && !here) {
-    say(`\nNo \`origin\` remote here, so this checkout cannot be matched to ${shortRepo(declared!)}, where rgstr reads the badge. The diff below is for ${rel}; make sure this is that repository before pushing it.`);
+    say(`\nNo \`origin\` remote here, so this checkout cannot be matched to ${shortRepo(declared!)}, where rgstr reads the badge. The diff below is for its ${repoDirectoryFrom(declared!) ? `${repoDirectoryFrom(declared!)}/` : 'root '}README, ${rel}; make sure this checkout is that repository before pushing it.`);
   }
   if (!declared) {
     say(`\n(${name} declares no repository on ${registry}${here ? `; this checkout is ${shortRepo(here)}` : ''}. Declare \`repository\` in your next release so rgstr knows where to look, or keep the badge in the package README with --here.)`);
@@ -694,7 +705,7 @@ program
       if (written.length && checkout) {
         const files = written.map((r) => path.resolve(dir, r.readme!.file));
         const names = written.map((r) => r.name);
-        if (opts.pr) {
+        if (opts.pr && checkout.remote) {
           pr = await openBadgePr(checkout, files, names);
           if (!g.json) {
             if (pr.url) console.log(`\nOpened ${pr.url} (branch ${pr.branch}). Merge it, then: ${names.map((n) => `rgstr claim --check ${n}`).join('; ')}`);
@@ -704,7 +715,7 @@ program
             }
           }
         } else if (!g.json) {
-          console.log('\nNext:');
+          console.log(opts.pr ? '\nNo `origin` remote here, so --pr cannot push or open the pull request. By hand:' : '\nNext:');
           for (const step of nextSteps(written.map((r) => r.readme!.file), names)) console.log(`  ${step}`);
         }
       } else if (written.length && !g.json) {
