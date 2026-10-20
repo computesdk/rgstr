@@ -25,8 +25,8 @@ import type { Ecosystem } from './project.js';
 import { chooseTargets, detectPackages, gitCheckout, nextSteps, openBadgePr, planBadge, readmeFor, sameRepo, shortRepo, workspaceGlobs, type GitCheckout, type PackageTarget } from './readme.js';
 import { formatRouteRow, parseRouteSpec, type RouteInput, type RouteRecord } from './routes.js';
 import { applyUse, planUse, projectStatus, unifiedDiff, type UseChange } from './use.js';
-import { buildClaimPlan, fetchRepoUrl, proofKindLabel, renderClaimPlan, repoDirectoryFrom, type ProofSightingLike } from './claim.js';
 import { confirm, isInteractive } from './prompt.js';
+import { buildClaimPlan, fetchRepoUrl, proofKindLabel, renderClaimPlan, repoDirectoryFrom, type ProofSightingLike } from './claim.js';
 import { checkRow, checkTableRows, mapLimit, readDependencies, summaryLine, unansweredRow, type CheckRow, type Dependency } from './check.js';
 
 const require = createRequire(import.meta.url);
@@ -78,7 +78,7 @@ async function loginFlow(): Promise<void> {
       const me = await new RgstrClient({ baseUrl, token: creds.token, kind: 'device', org: null }).get<MeResponse>('/api/v1/me');
       const cfg = await loadConfig();
       const slugs = me.organizations.map((o) => o.slug);
-      // A remembered org from a different account would make every write 403.
+      // A remembered organization from a different account would make every write 403.
       const keep = cfg.org && slugs.includes(cfg.org) ? cfg.org : undefined;
       const next = keep ?? (slugs.length === 1 ? slugs[0] : undefined);
       if (next !== cfg.org) await saveConfig({ ...cfg, org: next });
@@ -129,17 +129,17 @@ program
       const c = await client();
       const base = { baseUrl: c.baseUrl, auth: c.auth.kind, org: c.auth.org };
       if (c.auth.kind === 'api_key') {
-        // An org key names its org itself; confirm it works with a cheap authed read.
+        // An organization key names its organization itself; confirm it works with a cheap authed read.
         const claims = await c.get<{ held: Array<{ name: string }> }>('/api/v1/registry/claims');
         if (globals().json) printJson({ ...base, held: claims.held.length });
-        else console.log(kv([['auth', 'org API key'], ['base', c.baseUrl], ['org', c.auth.org ?? '(from key)'], ['names held', String(claims.held.length)]]));
+        else console.log(kv([['auth', 'organization API key'], ['base', c.baseUrl], ['organization', c.auth.org ?? '(from key)'], ['names held', String(claims.held.length)]]));
         return;
       }
       const me = await c.get<MeResponse>('/api/v1/me');
       if (globals().json) printJson({ ...base, user: me.user, organizations: me.organizations });
       else {
-        console.log(kv([['user', me.user.email], ['base', c.baseUrl], ['org', c.auth.org ?? '(none — rgstr org use <slug>)']]));
-        if (me.organizations.length) console.log('\norgs: ' + me.organizations.map((o) => o.slug).join(', '));
+        console.log(kv([['user', me.user.email], ['base', c.baseUrl], ['organization', c.auth.org ?? '(none — rgstr org use <slug>)']]));
+        if (me.organizations.length) console.log('\norganizations: ' + me.organizations.map((o) => o.slug).join(', '));
       }
     } catch (err) {
       fail(err);
@@ -176,8 +176,8 @@ type UseOpts = { npm?: boolean; pip?: boolean; off?: boolean; dryRun?: boolean; 
 
 const planned = (changes: UseChange[]) => changes.filter((c) => c.action === 'written' || c.action === 'removed');
 
-/** Show the diff, ask (unless --yes / --dry-run), write, say what changed. */
-async function useFlow(opts: UseOpts): Promise<void> {
+/** Show the diff, ask (unless --yes / --dry-run), write, say what changed and how to undo it. */
+async function useFlow(opts: UseOpts, ctx: { signedIn?: boolean } = {}): Promise<void> {
   const g = globals();
   const origin = await resolveBaseUrl(g);
   assertHostAllowed(origin, g.allowUntrustedHost);
@@ -226,11 +226,13 @@ async function useFlow(opts: UseOpts): Promise<void> {
     }
   }
   await applyUse(changes);
-  console.log(`\n${pending.map((c) => `${c.file}: ${c.action}`).join(', ')}.`);
+  console.log('');
+  for (const c of pending) console.log(`${c.file}: ${c.action === 'removed' ? 'removed the rgstr block' : 'written'} (${c.clients.join(', ')})`);
   if (opts.off) console.log('Installs go straight to npm / PyPI again.');
   else {
     console.log(`Installs now resolve through ${origin}: names someone holds → the holder's routes; everything else → npm / PyPI, unchanged.`);
-    console.log('Undo with `rgstr setup --off`.');
+    console.log(`Undo with \`rgstr setup --off\` — it removes exactly the lines above and leaves ${pending.map((c) => c.file).join(', ')} as ${pending.length === 1 ? 'it was' : 'they were'}.`);
+    if (!ctx.signedIn) console.log('Optional: `rgstr login` to sign in and apply your organization\'s rules; installs work without it.');
   }
 }
 
@@ -246,27 +248,30 @@ function withUseOptions(cmd: Command): Command {
 withUseOptions(
   program
     .command('setup')
-    .description('point this project\'s installs at rgstr (.npmrc / pip config): shows the diff, asks, writes; signs you in first if needed'),
+    .description('point this project\'s installs at rgstr (.npmrc / pip config): shows the diff, asks, writes, says how to undo it; no sign-in needed'),
 ).action(async (opts: UseOpts) => {
   try {
-    // Signing in is only to pick the org for the hint below; --json callers
-    // want the plan, not a device-code prompt in the middle of their output.
+    // A stored login only adds the greeting; nobody is asked to sign in to
+    // write one .npmrc line. --json callers want the plan, nothing else.
+    let signedIn = false;
     if (!opts.off && !opts.dryRun && !globals().json) {
-      let signedIn = false;
       try {
-        const c = await client();
-        const me = await c.get<MeResponse>('/api/v1/me');
-        signedIn = true;
-        console.log(`Signed in as ${me.user.email}` + (c.auth.org ? ` · organization ${c.auth.org}` : ''));
-        if (!c.auth.org && me.organizations.length > 1) {
-          console.log('Pick an organization: ' + me.organizations.map((o) => `rgstr org use ${o.slug}`).join(' | '));
+        const auth = await resolveAuth({ ...globals(), optional: true });
+        if (auth.kind !== 'none') {
+          const c = new RgstrClient(auth);
+          const me = await c.get<MeResponse>('/api/v1/me');
+          signedIn = true;
+          console.log(`Signed in as ${me.user.email}` + (c.auth.org ? ` · organization ${c.auth.org}` : ''));
+          if (!c.auth.org && me.organizations.length > 1) {
+            console.log('Pick an organization: ' + me.organizations.map((o) => `rgstr org use ${o.slug}`).join(' | '));
+          }
         }
       } catch {
+        // Offline or a stale login: setup is local, carry on signed-out.
         signedIn = false;
       }
-      if (!signedIn) await loginFlow();
     }
-    await useFlow(opts);
+    await useFlow(opts, { signedIn });
   } catch (err) {
     fail(err);
   }
@@ -315,7 +320,7 @@ program
             : auth.kind === 'stale'
               ? `signed in, but the login could not be refreshed (${auth.error}) — try again online or \`rgstr login\``
               : 'not signed in — `rgstr login`';
-      console.log(kv([['project', dir], ['rgstr', rgstr], ['org', auth.org ?? '(none — rgstr org use <slug>)'], ['auth', who]]));
+      console.log(kv([['project', dir], ['rgstr', rgstr], ['organization', auth.org ?? '(none — rgstr org use <slug>)'], ['auth', who]]));
     } catch (err) {
       fail(err);
     }
@@ -489,7 +494,7 @@ async function checkOne(c: Awaited<ReturnType<typeof client>>, g: ReturnType<typ
 
 interface ReadmeOutcome {
   file: string;
-  action: 'written' | 'replaced' | 'present' | 'declined' | 'needs_yes' | 'wrong_repo' | 'none';
+  action: 'written' | 'replaced' | 'present' | 'needs_yes' | 'wrong_repo' | 'none';
   line?: string;
   reason?: string;
 }
@@ -564,48 +569,56 @@ async function claimOne(
     if (claim.proofKinds?.length) console.log(`\nAccepted proofs: ${claim.proofKinds.join(', ')}.`);
   };
 
-  if (!ctx.checkout) {
+  if (t.manifest === null) {
+    // `rgstr claim <name>` with no package here: there is no README of ours
+    // to edit, so the badge and the agent prompt are the deliverable.
     printPlan();
-    say('\nNo files were changed.');
+    out.readme = { file: 'README.md', action: 'none', reason: 'no package here' };
     return out;
   }
 
-  // Inside a git checkout: the README is where the badge goes — if this is
-  // the repository the package declares.
+  // The README rgstr reads is where the badge goes: the folder the package
+  // declares (else the repository root) when this checkout is that
+  // repository; the package's own README with --here. Outside a checkout, or
+  // when the two cannot be matched, the diff is still shown — writing always
+  // takes --yes, so looking costs nothing.
   const declared = plan.repoUrl;
-  const here = ctx.checkout.remote;
-  const declaredDir = !opts.here && declared && here && sameRepo(declared, here) ? repoDirectoryFrom(declared) : undefined;
-  const { file, exists, where } = await readmeFor({ ...t, manifest: t.manifest ?? '' }, ctx.checkout.root, opts.here ? false : ctx.single, declaredDir);
+  const here = ctx.checkout?.remote ?? null;
+  const root = ctx.checkout?.root ?? t.dir;
+  const matched = !!(declared && here && sameRepo(declared, here));
+  // No `origin` to compare: the checkout is taken to be the declared
+  // repository, so the badge still goes where rgstr reads it.
+  const assumed = !!declared && !!ctx.checkout && !here;
+  const declaredDir = !opts.here && (matched || assumed) ? repoDirectoryFrom(declared!) : undefined;
+  const { file, exists, where } = await readmeFor({ ...t, manifest: t.manifest ?? '' }, root, opts.here ? false : ctx.single, declaredDir);
   const rel = path.relative(ctx.dir, file) || path.basename(file);
-  if (declared && here && !sameRepo(declared, here)) {
-    const registry = ecosystem === 'npm' ? 'npm' : 'PyPI';
-    say(`\n${registry} says ${shortRepo(declared)}, this checkout is ${shortRepo(here)} — the badge must land in ${shortRepo(declared)}'s README, so nothing was written here.`);
+  const registry = ecosystem === 'npm' ? 'npm' : 'PyPI';
+  const mismatch = !opts.here && declared && here && !matched;
+  if (mismatch) {
+    say(`\n${registry} says ${shortRepo(declared!)}, this checkout is ${shortRepo(here!)} — rgstr reads the badge off ${shortRepo(declared!)}'s README, so it will not be written here. Run this in a checkout of ${shortRepo(declared!)}, or keep it in this package's README with --here (verifies on the next publish).`);
     printPlan();
     out.readme = { file: rel, action: 'wrong_repo', reason: `declared ${declared}, checkout ${here}` };
     return out;
   }
-  if (declared && !here) {
-    // Without a remote to compare, writing could leak the token into a
-    // checkout of some other repository; print instead.
-    say(`\nNo \`origin\` remote here, so this checkout cannot be matched to ${shortRepo(declared)} (where the badge must land) — nothing was written.`);
-    printPlan();
-    out.readme = { file: rel, action: 'wrong_repo', reason: `declared ${declared}, no origin remote` };
-    return out;
+  if (!opts.here && declared && !ctx.checkout) {
+    say(`\nNot a git checkout, so this folder cannot be matched to ${shortRepo(declared!)}, where rgstr reads the badge (its ${repoDirectoryFrom(declared!) ? `${repoDirectoryFrom(declared!)}/` : 'root '}README). The diff below is for ${rel} here; it counts once that line is in ${shortRepo(declared!)}'s README, or ships in the package README.`);
+  } else if (!opts.here && declared && !here) {
+    say(`\nNo \`origin\` remote here, so this checkout cannot be matched to ${shortRepo(declared!)}, where rgstr reads the badge. The diff below is for its ${repoDirectoryFrom(declared!) ? `${repoDirectoryFrom(declared!)}/` : 'root '}README, ${rel}; make sure this checkout is that repository before pushing it.`);
   }
   if (!declared) {
-    say(`\n(${name} declares no repository on ${ecosystem === 'npm' ? 'npm' : 'PyPI'}${here ? `; this checkout is ${shortRepo(here)}` : ''}. Declare \`repository\` in your next release so rgstr knows where to look, or keep the badge in the package README with --here.)`);
+    say(`\n(${name} declares no repository on ${registry}${here ? `; this checkout is ${shortRepo(here)}` : ''}. Declare \`repository\` in your next release so rgstr knows where to look, or keep the badge in the package README with --here.)`);
   }
 
-  if (opts.here && declared && repoDirectoryFrom(declared) === null && path.resolve(ctx.checkout.root) !== path.resolve(t.dir)) {
-    say(`\n--here: the badge stays in ${rel}. rgstr reads the repository's root README on GitHub, not this one, so the claim verifies when this README ships in your next ${ecosystem === 'npm' ? 'npm' : 'PyPI'} release (rgstr claim --check ${name} after publishing).`);
+  if (opts.here && declared && repoDirectoryFrom(declared) === null && path.resolve(root) !== path.resolve(t.dir)) {
+    say(`\n--here: the badge stays in ${rel}. rgstr reads the repository's root README on GitHub, not this one, so the claim verifies when this README ships in your next ${registry} release (rgstr claim --check ${name} after publishing).`);
   } else if (where === 'root') {
-    const manifestRel = path.relative(ctx.checkout.root, t.manifest ?? t.dir).split(path.sep).join('/');
-    const pkgDir = path.relative(ctx.checkout.root, t.dir).split(path.sep).join('/');
+    const manifestRel = path.relative(root, t.manifest ?? t.dir).split(path.sep).join('/');
+    const pkgDir = path.relative(root, t.dir).split(path.sep).join('/');
     say(
-      `\n${ecosystem === 'npm' ? 'npm' : 'PyPI'} says ${shortRepo(declared!)} with no directory, so rgstr reads the repository's root README — the badge goes in ${rel}, not next to ${manifestRel}. To keep it with the package, declare ${ecosystem === 'npm' ? `"repository": { "url": ..., "directory": "${pkgDir}" }` : `the /tree/HEAD/${pkgDir} URL`} in your next release.`,
+      `\n${registry} says ${shortRepo(declared!)} with no directory, so rgstr reads the repository's root README — the badge goes in ${rel}, not next to ${manifestRel}. To keep it with the package, declare ${ecosystem === 'npm' ? `"repository": { "url": ..., "directory": "${pkgDir}" }` : `the /tree/HEAD/${pkgDir} URL`} in your next release.`,
     );
   } else if (where === 'declared') {
-    say(`\n${ecosystem === 'npm' ? 'npm' : 'PyPI'} says ${shortRepo(declared!)}, so the badge goes in that folder's README (${rel}).`);
+    say(`\n${registry} says ${shortRepo(declared!)}, so the badge goes in that folder's README (${rel}).`);
   }
 
   const source = exists ? await fs.readFile(file, 'utf8') : null;
@@ -617,35 +630,27 @@ async function claimOne(
   }
   say(
     `\n${rel}: ${
-      bp.kind === 'replace' ? `has a badge for ${name} with a different token — will replace it` : exists ? 'will add the badge under the first heading' : 'does not exist — will create it with the badge'
+      bp.kind === 'replace' ? `has a badge for ${name} with a different token — will replace it` : exists ? 'will add the badge under the first heading' : `no README in ${path.dirname(rel) === '.' ? 'this directory' : path.dirname(rel)} — will create it with the badge`
     }`,
   );
   if (!g.json) console.log(unifiedDiff(rel, source, bp.next));
-  const auto = !!(opts.yes || opts.badge);
-  const go: boolean | null = auto ? true : g.json || !isInteractive() ? null : await confirm(`Write ${rel}?`);
-  if (go === null) {
-    say(`\nNothing written — re-run with --yes to write it (add --pr to open the pull request too), or add the line yourself:`);
-    printPlan();
+  if (!(opts.yes || opts.badge)) {
+    say(`\nNothing written — this is the change. Re-run with --yes to write it (add --pr to open the pull request too), or add the line to ${rel} yourself.${opts.here ? '' : ` --here puts it in this package's own README instead (verifies on the next publish).`}`);
     out.readme = { file: rel, action: 'needs_yes', reason: 'pass --yes to write' };
     return out;
   }
-  if (!go) {
-    say('Nothing written.');
-    printPlan();
-    out.readme = { file: rel, action: 'declined' };
-    return out;
-  }
+  await fs.mkdir(path.dirname(file), { recursive: true });
   await fs.writeFile(file, bp.next);
-  say(`${rel}: ${plan.badge}`);
+  say(`\n${rel}: ${bp.kind === 'replace' ? 'replaced the badge' : exists ? 'written' : 'created'}`);
   out.readme = { file: rel, action: bp.kind === 'replace' ? 'replaced' : 'written', line: plan.badge };
   return out;
 }
 
 program
   .command('claim [name]')
-  .description('claim a name for your organization and put the README badge that proves it under the first heading (shows the diff, asks; writes nothing else)')
+  .description('claim a name for your organization and put the README badge that proves it under the first heading: in a package directory it shows the diff and writes only with --yes (nothing else is touched)')
   .option('--check', 'look for the proof: the badge in the repo README on GitHub, or in the README of the published package')
-  .option('-y, --yes', 'write the badge without asking (the diff is still shown)')
+  .option('-y, --yes', 'write the badge (without it the diff is only shown)')
   .option('--pr', 'after writing: branch rgstr-badge-<name>, commit, push, open the pull request with gh')
   .option('--all', 'at a workspace root (pnpm/npm/yarn workspaces, uv): claim every member package; without it the root only lists them')
   .option('--here', "keep the badge in this package's own README even when the registry points at the repository root — it then verifies on the next publish (the badge ships in the package README) rather than on merge")
@@ -700,7 +705,7 @@ program
       if (written.length && checkout) {
         const files = written.map((r) => path.resolve(dir, r.readme!.file));
         const names = written.map((r) => r.name);
-        if (opts.pr) {
+        if (opts.pr && checkout.remote) {
           pr = await openBadgePr(checkout, files, names);
           if (!g.json) {
             if (pr.url) console.log(`\nOpened ${pr.url} (branch ${pr.branch}). Merge it, then: ${names.map((n) => `rgstr claim --check ${n}`).join('; ')}`);
@@ -710,9 +715,12 @@ program
             }
           }
         } else if (!g.json) {
-          console.log('\nNext:');
+          console.log(opts.pr ? '\nNo `origin` remote here, so --pr cannot push or open the pull request. By hand:' : '\nNext:');
           for (const step of nextSteps(written.map((r) => r.readme!.file), names)) console.log(`  ${step}`);
         }
+      } else if (written.length && !g.json) {
+        console.log('\nNext: get that README into the repository the package declares (or publish it with the package), then:');
+        for (const r of written) console.log(`  rgstr claim --check ${r.name}`);
       }
 
       if (g.json) {
@@ -788,7 +796,7 @@ interface OrgPackage {
 async function heldPackage(c: RgstrClient, name: string): Promise<OrgPackage> {
   const res = await c.get<{ packages: OrgPackage[] }>('/api/v1/packages');
   const pkg = res.packages.find((p) => p.name === name);
-  if (!pkg) throw new RgstrCliError('not_holder', `${c.auth.org ?? 'Your org'} does not hold ${name} — see \`rgstr whois ${name}\`.`);
+  if (!pkg) throw new RgstrCliError('not_holder', `${c.auth.org ?? 'Your organization'} does not hold ${name} — see \`rgstr whois ${name}\`.`);
   return pkg;
 }
 

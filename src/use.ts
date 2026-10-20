@@ -5,11 +5,19 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
-export const BLOCK_START = '# >>> rgstr (managed by `rgstr use`; remove with `rgstr use --off`)';
+export const BLOCK_START = '# >>> rgstr (managed by `rgstr setup`; remove with `rgstr setup --off`)';
+/** What 0.0.1–0.0.7 wrote; still recognised so `--off` removes it. */
+const LEGACY_BLOCK_START = '# >>> rgstr (managed by `rgstr use`; remove with `rgstr use --off`)';
 export const BLOCK_END = '# <<< rgstr';
 const NEEDS_NEWLINE = `${BLOCK_START} +nl`;
 /** Header variant for a file the CLI created, so `--off` knows it may delete it. */
 const CREATED_FILE = `${BLOCK_START} +new`;
+
+/** Index of the managed block's header line, current or legacy wording. */
+function blockStart(current: string): number {
+  const now = current.indexOf(BLOCK_START);
+  return now === -1 ? current.indexOf(LEGACY_BLOCK_START) : now;
+}
 
 export type ClientId = 'npm' | 'yarn' | 'bun' | 'pip' | 'uv' | 'poetry';
 
@@ -131,15 +139,15 @@ const SHADOW_PREFIX = '#rgstr-was: ';
 /** Remove the managed block, restoring the original bytes around it.
  *  `createdFile` says the file did not exist before `rgstr use` wrote it. */
 export function stripBlock(current: string): { content: string; found: boolean; createdFile: boolean } {
-  const start = current.indexOf(BLOCK_START);
+  const start = blockStart(current);
   if (start === -1) return { content: current, found: false, createdFile: false };
   const endMarker = current.indexOf(BLOCK_END, start);
   if (endMarker === -1) return { content: current, found: false, createdFile: false };
   let end = endMarker + BLOCK_END.length;
   if (current[end] === '\n') end += 1;
   const header = current.slice(start, current.indexOf('\n', start));
-  const addedNl = header === NEEDS_NEWLINE;
-  const createdFile = header === CREATED_FILE;
+  const addedNl = header.endsWith(' +nl');
+  const createdFile = header.endsWith(' +new');
   const before = addedNl && current[start - 1] === '\n' ? current.slice(0, start - 1) : current.slice(0, start);
   const shadowed = current
     .slice(start, endMarker)
@@ -302,7 +310,7 @@ export async function projectStatus(dir: string): Promise<StatusFile[]> {
     const full = path.join(dir, file);
     if (!(await exists(full))) continue;
     const current = await fs.readFile(full, 'utf8');
-    const start = current.indexOf(BLOCK_START);
+    const start = blockStart(current);
     const end = start === -1 ? -1 : current.indexOf(BLOCK_END, start);
     const managed = start !== -1 && end !== -1;
     const text = managed ? current.slice(start, end) : current;
