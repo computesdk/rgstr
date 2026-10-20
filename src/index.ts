@@ -26,7 +26,7 @@ import { chooseTargets, detectPackages, gitCheckout, nextSteps, openBadgePr, pla
 import { formatRouteRow, parseRouteSpec, type RouteInput, type RouteRecord } from './routes.js';
 import { applyUse, planUse, projectStatus, unifiedDiff, type UseChange } from './use.js';
 import { confirm, isInteractive } from './prompt.js';
-import { buildClaimPlan, fetchRepoUrl, proofKindLabel, renderClaimPlan, repoDirectoryFrom, type ProofSightingLike } from './claim.js';
+import { badgeMarkdown, buildClaimPlan, describeRepo, fetchRepoUrl, proofKindLabel, renderClaimPlan, repoDirectoryFrom, type ProofSightingLike } from './claim.js';
 import { checkRow, checkTableRows, mapLimit, readDependencies, summaryLine, unansweredRow, type CheckRow, type Dependency } from './check.js';
 
 const require = createRequire(import.meta.url);
@@ -499,90 +499,111 @@ interface ReadmeOutcome {
   reason?: string;
 }
 
+/** Stands in for the proof token until the claim is filed: the preview diff
+ *  shows the line, the write uses the real one. */
+const PROOF_PLACEHOLDER = 'rgstr_…';
+
+/** One package, planned and shown. Nothing is filed or written from here. */
+interface ClaimPreview {
+  t: ClaimTarget;
+  /** Already verified for this organization: nothing to file, nothing to write. */
+  verified: boolean;
+  /** An application already under review: nothing to file; its proof is the badge. */
+  pending: ClaimResponse | null;
+  repoUrl: string | null;
+  /** The README the badge goes in, as it is now; `write` when the badge is not in it yet. */
+  readme: { file: string; rel: string; exists: boolean; source: string | null; write: boolean } | null;
+  outcome: ReadmeOutcome | null;
+}
+
 interface ClaimOutcome {
   name: string;
   ecosystem: Ecosystem;
-  claim: ClaimResponse;
+  claim: ClaimResponse | null;
   alreadyPending: boolean;
   repoUrl: string | null;
   plan: ReturnType<typeof buildClaimPlan> | null;
   readme: ReadmeOutcome | null;
 }
 
-/** File the claim for one package and, inside a git checkout, offer to put the
- *  badge in its README. Writes only after a diff and a yes. */
-async function claimOne(
+function claimFromPending(c: RgstrClient, pending: ClaimsList['pending'][number]): ClaimResponse {
+  const { proof, badgeMarkdown: badge, agentPrompt, repoUrl, proofKinds, ...request } = pending;
+  return { request, dispute: null, proof, url: `${c.baseUrl}/registry/${pending.name}`, badgeMarkdown: badge, agentPrompt, repoUrl, proofKinds };
+}
+
+/** The badge links to the public origin the server names; a dev base URL
+ *  still gets a badge it can serve. */
+function originOf(c: RgstrClient, claim: ClaimResponse | null): string {
+  try {
+    return claim ? new URL(claim.url).origin : c.baseUrl;
+  } catch {
+    return c.baseUrl;
+  }
+}
+
+function planFor(c: RgstrClient, claim: ClaimResponse, t: ClaimTarget, repoUrl: string | null) {
+  if (!claim.proof) return null;
+  const origin = originOf(c, claim);
+  return buildClaimPlan({ name: t.name, ecosystem: t.ecosystem, origin, token: claim.proof.token, repoUrl: claim.repoUrl ?? repoUrl, badge: claim.badgeMarkdown ?? claim.proof.badge, agentPrompt: claim.agentPrompt });
+}
+
+function printPlan(g: ReturnType<typeof globals>, plan: NonNullable<ReturnType<typeof planFor>>, claim: ClaimResponse): void {
+  if (g.json) return;
+  console.log('');
+  console.log(renderClaimPlan(plan));
+  if (claim.proofKinds?.length) console.log(`\nAccepted proofs: ${claim.proofKinds.join(', ')}.`);
+}
+
+/** Show what `rgstr claim` would do for one package: whether a claim gets
+ *  filed, and the diff of the README the badge goes in. Reads only — the
+ *  organization's applications, public package metadata, local files. */
+async function previewOne(
   c: Awaited<ReturnType<typeof client>>,
   g: ReturnType<typeof globals>,
   opts: ClaimOpts,
   t: ClaimTarget,
-  ctx: { dir: string; checkout: GitCheckout | null; single: boolean },
-): Promise<ClaimOutcome> {
+  list: ClaimsList,
+  ctx: { dir: string; checkout: GitCheckout | null; single: boolean; asWho: string },
+): Promise<ClaimPreview> {
   const { name, ecosystem } = t;
   const say = (line: string) => {
     if (!g.json) console.log(line);
   };
-  let claim: ClaimResponse;
-  let alreadyPending = false;
-  say(`Claiming ${name} as ${c.auth.org ?? (c.auth.kind === 'api_key' ? 'the organization your API key belongs to' : 'your organization (pick one with `rgstr org use <slug>`)')}`);
-  try {
-    claim = await c.post<ClaimResponse>('/api/v1/registry/claims', { name, statement: opts.statement });
-  } catch (err) {
-    if (!(err instanceof RgstrApiError && err.status === 409)) throw err;
-    // Already applied: carry on with that application's proof so a retry
-    // prints the same badge.
-    const list = await c.get<ClaimsList>('/api/v1/registry/claims');
-    const pending = list.pending.find((p) => p.name === name);
-    if (!pending) throw err;
-    alreadyPending = true;
-    const { proof, badgeMarkdown, agentPrompt, repoUrl, proofKinds, ...request } = pending;
-    claim = { request, dispute: null, proof, url: `${c.baseUrl}/registry/${name}`, badgeMarkdown, agentPrompt, repoUrl, proofKinds };
+  say(`Claiming ${name} as ${ctx.asWho}`);
+  const held = list.held.find((h) => h.name === name);
+  if (held?.status === 'verified') {
+    say(`${name}: verified — your organization already claims it. ${c.baseUrl}/registry/${name}`);
+    return { t, verified: true, pending: null, repoUrl: null, readme: null, outcome: { file: 'README.md', action: 'none', reason: 'already verified' } };
   }
+  const pendingRecord = list.pending.find((p) => p.name === name);
+  const pending = pendingRecord ? claimFromPending(c, pendingRecord) : null;
+  if (pending) say(`${name}: already under review (${pending.request.id.slice(0, 8)}) — nothing to file.`);
+  else say(`Files the claim: ${name} goes under review until the badge is in a README rgstr reads.`);
 
-  // The badge links to the public origin the server names; a dev base URL
-  // still gets a badge it can serve.
-  const origin = (() => {
-    try {
-      return new URL(claim.url).origin;
-    } catch {
-      return c.baseUrl;
-    }
-  })();
-  const repoUrl = claim.repoUrl ?? (claim.proof ? await fetchRepoUrl(origin, name, ecosystem) : null);
-  const plan = claim.proof
-    ? buildClaimPlan({ name, ecosystem, origin, token: claim.proof.token, repoUrl, badge: claim.badgeMarkdown ?? claim.proof.badge, agentPrompt: claim.agentPrompt })
-    : null;
-
-  say(alreadyPending ? `${name}: already under review (${claim.request.id.slice(0, 8)}).` : `Filed: ${name} (${claim.url})`);
-  if (claim.dispute) say(`Claimed by ${claim.dispute.holder} via ${claim.dispute.via} — this is a dispute; a reviewer decides.`);
-
-  const out: ClaimOutcome = { name, ecosystem, claim, alreadyPending, repoUrl, plan, readme: null };
-  if (!plan) {
+  const repoUrl = pending?.repoUrl ?? (await fetchRepoUrl(originOf(c, pending), name, ecosystem));
+  const plan = pending ? planFor(c, pending, t, repoUrl) : null;
+  if (pending && !plan) {
     say('Namespace claims are reviewed on identity + evidence; nothing to publish.');
-    return out;
+    return { t, verified: false, pending, repoUrl, readme: null, outcome: null };
   }
-
-  const printPlan = () => {
-    if (g.json) return;
-    console.log('');
-    console.log(renderClaimPlan(plan));
-    if (claim.proofKinds?.length) console.log(`\nAccepted proofs: ${claim.proofKinds.join(', ')}.`);
-  };
+  const badge = plan?.badge ?? badgeMarkdown(c.baseUrl, name, PROOF_PLACEHOLDER);
+  const preview: ClaimPreview = { t, verified: false, pending, repoUrl, readme: null, outcome: null };
 
   if (t.manifest === null) {
     // `rgstr claim <name>` with no package here: there is no README of ours
     // to edit, so the badge and the agent prompt are the deliverable.
-    printPlan();
-    out.readme = { file: 'README.md', action: 'none', reason: 'no package here' };
-    return out;
+    if (plan && pending) printPlan(g, plan, pending);
+    else say(`No package here: once filed, it prints the badge for the README of ${describeRepo(name, ecosystem, repoUrl)} and a prompt for your coding agent.`);
+    preview.outcome = { file: 'README.md', action: 'none', reason: 'no package here' };
+    return preview;
   }
 
   // The README rgstr reads is where the badge goes: the folder the package
   // declares (else the repository root) when this checkout is that
   // repository; the package's own README with --here. Outside a checkout, or
   // when the two cannot be matched, the diff is still shown — writing always
-  // takes --yes, so looking costs nothing.
-  const declared = plan.repoUrl;
+  // takes a yes, so looking costs nothing.
+  const declared = repoUrl;
   const here = ctx.checkout?.remote ?? null;
   const root = ctx.checkout?.root ?? t.dir;
   const matched = !!(declared && here && sameRepo(declared, here));
@@ -596,9 +617,9 @@ async function claimOne(
   const mismatch = !opts.here && declared && here && !matched;
   if (mismatch) {
     say(`\n${registry} says ${shortRepo(declared!)}, this checkout is ${shortRepo(here!)} — rgstr reads the badge off ${shortRepo(declared!)}'s README, so it will not be written here. Run this in a checkout of ${shortRepo(declared!)}, or keep it in this package's README with --here (verifies on the next publish).`);
-    printPlan();
-    out.readme = { file: rel, action: 'wrong_repo', reason: `declared ${declared}, checkout ${here}` };
-    return out;
+    if (plan && pending) printPlan(g, plan, pending);
+    preview.outcome = { file: rel, action: 'wrong_repo', reason: `declared ${declared}, checkout ${here}` };
+    return preview;
   }
   if (!opts.here && declared && !ctx.checkout) {
     say(`\nNot a git checkout, so this folder cannot be matched to ${shortRepo(declared!)}, where rgstr reads the badge (its ${repoDirectoryFrom(declared!) ? `${repoDirectoryFrom(declared!)}/` : 'root '}README). The diff below is for ${rel} here; it counts once that line is in ${shortRepo(declared!)}'s README, or ships in the package README.`);
@@ -622,11 +643,12 @@ async function claimOne(
   }
 
   const source = exists ? await fs.readFile(file, 'utf8') : null;
-  const bp = planBadge(source, name, plan.badge);
+  const bp = planBadge(source, name, badge);
   if (bp.kind === 'present') {
     say(`\n${rel} already has the badge for ${name} (token matches). Commit and push it if you have not, then: rgstr claim --check ${name}`);
-    out.readme = { file: rel, action: 'present', line: bp.old.line };
-    return out;
+    preview.readme = { file, rel, exists, source, write: false };
+    preview.outcome = { file: rel, action: 'present', line: bp.old.line };
+    return preview;
   }
   say(
     `\n${rel}: ${
@@ -634,9 +656,60 @@ async function claimOne(
     }`,
   );
   if (!g.json) console.log(unifiedDiff(rel, source, bp.next));
-  if (!(opts.yes || opts.badge)) {
-    say(`\nNothing written — this is the change. Re-run with --yes to write it (add --pr to open the pull request too), or add the line to ${rel} yourself.${opts.here ? '' : ` --here puts it in this package's own README instead (verifies on the next publish).`}`);
-    out.readme = { file: rel, action: 'needs_yes', reason: 'pass --yes to write' };
+  if (!pending) say(`(${PROOF_PLACEHOLDER} is the proof token; it is issued when the claim is filed and written in its place.)`);
+  preview.readme = { file, rel, exists, source, write: true };
+  preview.outcome = { file: rel, action: 'needs_yes', reason: 'pass --yes to write' };
+  return preview;
+}
+
+/** File the claim and write the badge for one package — only ever after
+ *  `--yes` or a yes at the prompt. */
+async function applyOne(c: Awaited<ReturnType<typeof client>>, g: ReturnType<typeof globals>, opts: ClaimOpts, p: ClaimPreview): Promise<ClaimOutcome> {
+  const { t } = p;
+  const { name, ecosystem } = t;
+  const say = (line: string) => {
+    if (!g.json) console.log(line);
+  };
+  const out: ClaimOutcome = { name, ecosystem, claim: p.pending, alreadyPending: !!p.pending, repoUrl: p.repoUrl, plan: null, readme: p.outcome };
+  if (p.verified) return out;
+
+  let claim = p.pending;
+  if (!claim) {
+    try {
+      claim = await c.post<ClaimResponse>('/api/v1/registry/claims', { name, statement: opts.statement });
+    } catch (err) {
+      if (!(err instanceof RgstrApiError && err.status === 409)) throw err;
+      // Filed in the meantime: carry on with that application's proof so the
+      // badge written is the one that verifies.
+      const list = await c.get<ClaimsList>('/api/v1/registry/claims');
+      const pending = list.pending.find((r) => r.name === name);
+      if (!pending) throw err;
+      out.alreadyPending = true;
+      claim = claimFromPending(c, pending);
+    }
+    say(out.alreadyPending ? `${name}: already under review (${claim.request.id.slice(0, 8)}).` : `Filed: ${name} (${claim.url})`);
+    if (claim.dispute) say(`Claimed by ${claim.dispute.holder} via ${claim.dispute.via} — this is a dispute; a reviewer decides.`);
+  }
+  out.claim = claim;
+  const plan = planFor(c, claim, t, p.repoUrl);
+  out.plan = plan;
+  out.repoUrl = plan?.repoUrl ?? p.repoUrl;
+  if (!plan) {
+    if (!p.pending) say('Namespace claims are reviewed on identity + evidence; nothing to publish.');
+    return out;
+  }
+  // No README of ours to write (no package here, or the wrong checkout): the
+  // badge and the agent prompt are the deliverable — shown now that the proof
+  // token exists; a pending application showed them in the preview.
+  if (!p.readme) {
+    if (!p.pending) printPlan(g, plan, claim);
+    return out;
+  }
+  if (!p.readme.write) return out;
+  const { file, rel, exists, source } = p.readme;
+  const bp = planBadge(source, name, plan.badge);
+  if (bp.kind === 'present') {
+    out.readme = { file: rel, action: 'present', line: bp.old.line };
     return out;
   }
   await fs.mkdir(path.dirname(file), { recursive: true });
@@ -646,11 +719,22 @@ async function claimOne(
   return out;
 }
 
+/** "file the claim for x as acme and write README.md" — the sentence the
+ *  prompt, the --yes hint and the --json hint all use. */
+function describeApply(file: string[], write: string[], asWho: string): string {
+  const parts: string[] = [];
+  if (file.length === 1) parts.push(`file the claim for ${file[0]} as ${asWho}`);
+  else if (file.length) parts.push(`file ${file.length} claims (${file.join(', ')}) as ${asWho}`);
+  if (write.length === 1) parts.push(`write ${write[0]}`);
+  else if (write.length) parts.push(`write ${write.length} READMEs (${write.join(', ')})`);
+  return parts.join(' and ');
+}
+
 program
   .command('claim [name]')
-  .description('claim a name for your organization and put the README badge that proves it under the first heading: in a package directory it shows the diff and writes only with --yes (nothing else is touched)')
+  .description('claim a name for your organization and put the README badge that proves it under the first heading: shows what it will file and the README diff, asks, then files and writes — --yes skips the question (nothing else is touched)')
   .option('--check', 'look for the proof: the badge in the repo README on GitHub, or in the README of the published package')
-  .option('-y, --yes', 'write the badge (without it the diff is only shown)')
+  .option('-y, --yes', 'file the claim and write the badge without asking (the plan is still shown)')
   .option('--pr', 'after writing: branch rgstr-badge-<name>, commit, push, open the pull request with gh')
   .option('--all', 'at a workspace root (pnpm/npm/yarn workspaces, uv): claim every member package; without it the root only lists them')
   .option('--here', "keep the badge in this package's own README even when the registry points at the repository root — it then verifies on the next publish (the badge ships in the package README) rather than on merge")
@@ -689,15 +773,63 @@ program
         return;
       }
 
+      // Plan → confirm → apply. Everything up to the question is a read: the
+      // organization's applications, public package metadata, local files.
       const checkout = await gitCheckout(dir);
+      const asWho = c.auth.org ?? (c.auth.kind === 'api_key' ? 'the organization your API key belongs to' : 'your organization (pick one with `rgstr org use <slug>`)');
+      const list = await c.get<ClaimsList>('/api/v1/registry/claims');
       if (!g.json && targets.length > 1) {
         console.log(`${targets.length} packages in this workspace: ${targets.map((t) => t.name).join(', ')}`);
         console.log('');
       }
-      const results: ClaimOutcome[] = [];
+      const previews: ClaimPreview[] = [];
       for (const t of targets) {
+        if (previews.length && !g.json) console.log('');
+        previews.push(await previewOne(c, g, opts, t, list, { dir, checkout, single: targets.length === 1, asWho }));
+      }
+
+      const toFile = previews.filter((p) => !p.verified && !p.pending).map((p) => p.t.name);
+      const toWrite = previews.filter((p) => p.readme?.write).map((p) => p.readme!.rel);
+      const what = describeApply(toFile, toWrite, asWho);
+      const previewJson = (p: ClaimPreview) => ({
+        name: p.t.name,
+        ecosystem: p.t.ecosystem,
+        org: c.auth.org,
+        filed: false,
+        ...(p.pending ?? {}),
+        alreadyPending: !!p.pending,
+        repoUrl: p.repoUrl,
+        badge: p.pending ? planFor(c, p.pending, p.t, p.repoUrl)?.badge ?? null : null,
+        agentPrompt: p.pending ? planFor(c, p.pending, p.t, p.repoUrl)?.agentPrompt ?? null : null,
+        readme: p.outcome,
+      });
+      if (!what) {
+        // Already under review or verified, badge already in place: nothing to do.
+        if (g.json) printJson({ ...(previews.length === 1 ? previewJson(previews[0]) : { packages: previews.map(previewJson) }), pr: null, applied: false });
+        return;
+      }
+      if (!(opts.yes || opts.badge)) {
+        const prHint = toWrite.length && !opts.pr ? ' (add --pr to open the pull request too)' : '';
+        if (g.json) {
+          // --json never asks: it applies with --yes and otherwise reports the plan.
+          printJson({ ...(previews.length === 1 ? previewJson(previews[0]) : { packages: previews.map(previewJson) }), pr: null, applied: false, hint: `pass --yes to ${what}` });
+          return;
+        }
+        if (!isInteractive()) {
+          console.log(`\nNothing filed, nothing written — that is the plan. Re-run with --yes to ${what}${prHint}.`);
+          return;
+        }
+        if (!(await confirm(`\n${what[0].toUpperCase()}${what.slice(1)}?`))) {
+          console.log('Nothing filed, nothing written.');
+          return;
+        }
+        console.log('');
+      }
+
+      const results: ClaimOutcome[] = [];
+      for (const p of previews) {
         if (results.length && !g.json) console.log('');
-        results.push(await claimOne(c, g, opts, t, { dir, checkout, single: targets.length === 1 }));
+        results.push(await applyOne(c, g, opts, p));
       }
 
       const written = results.filter((r) => r.readme && (r.readme.action === 'written' || r.readme.action === 'replaced'));
@@ -728,14 +860,15 @@ program
           name: r.name,
           ecosystem: r.ecosystem,
           org: c.auth.org,
-          ...r.claim,
+          filed: !!r.claim && !r.alreadyPending,
+          ...(r.claim ?? {}),
           alreadyPending: r.alreadyPending,
           repoUrl: r.repoUrl,
           badge: r.plan?.badge ?? null,
           agentPrompt: r.plan?.agentPrompt ?? null,
           readme: r.readme,
         });
-        printJson(results.length === 1 ? { ...toJson(results[0]), pr } : { packages: results.map(toJson), pr });
+        printJson(results.length === 1 ? { ...toJson(results[0]), pr, applied: true } : { packages: results.map(toJson), pr, applied: true });
       }
     } catch (err) {
       fail(err);
@@ -802,18 +935,20 @@ async function heldPackage(c: RgstrClient, name: string): Promise<OrgPackage> {
 
 program
   .command('route <name>')
-  .description('list, add (--to) or remove (--rm) upstream routes for a name you claim')
+  .description('list, add (--to) or remove (--rm) upstream routes for a name you claim: a change shows the routes as they would be, asks, then applies — --yes skips the question')
   .option('--to <spec>', 'add a route, e.g. npm:tsc-rs@^0.7 or jsr:@scope/pkg@^1')
   .option('--rm <id>', 'remove a route by id (prefix ok)')
-  .action(async (name: string, opts: { to?: string; rm?: string }) => {
+  .option('-y, --yes', 'apply without asking (the change is still shown)')
+  .action(async (name: string, opts: { to?: string; rm?: string; yes?: boolean }) => {
     try {
+      const g = globals();
       const c = await client();
       const pkg = await heldPackage(c, name);
       const path = `/api/v1/packages/${pkg.id}/routes`;
       const current = (await c.get<{ routes: RouteRecord[] }>(path)).routes;
       let routes = current;
       if (opts.to || opts.rm) {
-        let next: RouteInput[] = current.map(({ versionRange, upstreamKind, upstream, upstreamName }) => ({ versionRange, upstreamKind, upstream, upstreamName }));
+        let keep = current;
         if (opts.rm) {
           const rm = opts.rm;
           const matches = current.filter((r) => r.id === rm || r.id.startsWith(rm));
@@ -822,16 +957,37 @@ program
             throw new RgstrCliError('invalid_argument', `${rm} matches ${matches.length} routes (${matches.map((r) => r.id.slice(0, 12)).join(', ')}) — give more of the id.`);
           }
           const victim = matches[0];
-          next = next.filter((_, i) => current[i].id !== victim.id);
+          keep = current.filter((r) => r.id !== victim.id);
         }
-        if (opts.to) {
-          const parsed = parseRouteSpec(opts.to, name);
-          next.push(parsed);
+        const added: RouteInput[] = opts.to ? [parseRouteSpec(opts.to, name)] : [];
+        const next: RouteInput[] = [...keep.map(({ versionRange, upstreamKind, upstream, upstreamName }) => ({ versionRange, upstreamKind, upstream, upstreamName })), ...added];
+        // Plan → confirm → apply: the PUT replaces the whole list, so the
+        // list as it would be is the thing to look at.
+        if (!opts.yes) {
+          if (g.json) {
+            // --json never asks: it applies with --yes and otherwise reports the plan.
+            printJson({ name, packageId: pkg.id, routes: current, planned: next, applied: false, hint: 'pass --yes to apply' });
+            return;
+          }
+          const target = (r: RouteInput) => `${r.versionRange} → ${r.upstreamKind}:${r.upstreamName ?? name}`;
+          console.log(`${name}: routes would become`);
+          for (const r of current) console.log(`  ${keep.includes(r) ? ' ' : '-'} ${target(r)}`);
+          for (const r of added) console.log(`  + ${target(r)}`);
+          if (next.length === 0) console.log(`  (none — installs fall back to npm:${name})`);
+          if (!isInteractive()) {
+            console.log('\nNothing changed — that is the plan. Re-run with --yes to apply it.');
+            return;
+          }
+          if (!(await confirm(`\nApply these routes to ${name}?`))) {
+            console.log('Nothing changed.');
+            return;
+          }
+          console.log('');
         }
         routes = (await c.put<{ routes: RouteRecord[] }>(path, { routes: next })).routes;
       }
-      if (globals().json) {
-        printJson({ name, packageId: pkg.id, routes });
+      if (g.json) {
+        printJson({ name, packageId: pkg.id, routes, ...(opts.to || opts.rm ? { applied: true } : {}) });
         return;
       }
       if (routes.length === 0) console.log(`${name}: no routes (default: npm:${name})`);
