@@ -8,6 +8,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { randomUUID } from 'node:crypto';
+import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import type { SearchObject, WhoisResponse } from '../../cli/src/api-types.js';
@@ -69,7 +70,7 @@ type SetupArgs = { cwd?: string; npm?: boolean; pip?: boolean; off?: boolean };
 type StoredPlan =
   | { kind: 'claim'; plan: ClaimPlan; opts: ClaimOpts; text: string; asWho: string | null; baseUrl: string }
   | { kind: 'route'; plan: RoutePlan; baseUrl: string }
-  | { kind: 'setup'; changes: UseChange[]; origin: string; off: boolean; args: SetupArgs };
+  | { kind: 'setup'; changes: UseChange[]; origin: string; off: boolean; args: SetupArgs; fingerprint: string };
 
 const text = (lines: string[] | string, data?: unknown): CallToolResult => {
   const body = Array.isArray(lines) ? lines.join('\n') : lines;
@@ -325,7 +326,10 @@ export function createServer(options: ServerOptions = {}, version = '0.0.0'): Mc
     return { origin, changes, pending: changes.filter((c) => c.action === 'written' || c.action === 'removed') };
   };
   const useJson = (changes: UseChange[]) => changes.map(({ path: _path, after: _after, ...c }) => c);
-  const useFingerprint = (changes: UseChange[]) => JSON.stringify(changes.map((c) => [c.file, c.action, c.after ?? null]));
+  // What the plan would write and what the file holds right now: an edit to
+  // the file since the plan (even inside the managed block) means a new plan.
+  const useFingerprint = async (changes: UseChange[]) =>
+    JSON.stringify(await Promise.all(changes.map(async (c) => [c.file, c.action, c.after ?? null, c.path ? await fs.readFile(c.path, 'utf8').catch(() => null) : null])));
 
   server.registerTool(
     'rgstr_setup_plan',
@@ -340,7 +344,7 @@ export function createServer(options: ServerOptions = {}, version = '0.0.0'): Mc
       run(async () => {
         const { origin, changes, pending } = await planSetup(args);
         const lines = describeUse(changes);
-        const plan_id = pending.length ? remember({ kind: 'setup', changes, origin, off: !!args.off, args }) : null;
+        const plan_id = pending.length ? remember({ kind: 'setup', changes, origin, off: !!args.off, args, fingerprint: await useFingerprint(changes) }) : null;
         if (pending.length) lines.push('', 'Nothing written — that is the plan. After the user confirms, call rgstr_setup_apply with plan_id.');
         return text(lines, { plan_id, origin, changes: useJson(changes), applied: false });
       }),
@@ -364,7 +368,7 @@ export function createServer(options: ServerOptions = {}, version = '0.0.0'): Mc
           // The files may have moved since the plan was shown: plan again and
           // write only if it is still the same plan, byte for byte.
           const now = await planSetup(stored.args);
-          if (now.origin !== stored.origin || useFingerprint(now.changes) !== useFingerprint(stored.changes)) {
+          if (now.origin !== stored.origin || (await useFingerprint(now.changes)) !== stored.fingerprint) {
             throw new RgstrCliError('conflict', 'The project changed since the plan was made; nothing written.', 'Call rgstr_setup_plan again and show the user the new plan');
           }
           ({ origin, changes, off } = stored);
