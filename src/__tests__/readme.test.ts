@@ -199,25 +199,32 @@ describe('after the write', () => {
       if (cmd === 'gh' && args[0] === 'pr') return { stdout: 'Creating pull request…\nhttps://github.com/pingdotgg/ts-rust/pull/42\n', stderr: '' };
       return { stdout: '', stderr: '' };
     }) as never;
-    expect(await openBadgePr(checkout, ['/work/ts-rust/README.md'], ['tsc-rs'], ok)).toEqual({ url: 'https://github.com/pingdotgg/ts-rust/pull/42', branch: 'rgstr-badge-tsc-rs' });
+    const badge = '[![rgstr](https://rgstr.org/registry/tsc-rs/badge.svg?proof=t)](https://rgstr.org/registry/tsc-rs)';
+    expect(await openBadgePr(checkout, [{ file: '/work/ts-rust/README.md', name: 'tsc-rs', badge }], ok)).toEqual({ url: 'https://github.com/pingdotgg/ts-rust/pull/42', branch: 'rgstr-badge-tsc-rs' });
     expect(calls).toEqual([
       'gh auth status',
+      'git ls-remote --symref origin',
+      'gh repo view --json',
+      'git symbolic-ref --quiet --short',
+      'git fetch origin main',
+      'git worktree add --detach',
       'git checkout -b rgstr-badge-tsc-rs',
-      'git add -- /work/ts-rust/README.md',
-      'git commit -m Add rgstr badge -- /work/ts-rust/README.md',
+      'git add -- README.md',
+      'git commit -m Add rgstr badge -- README.md',
       'git push -u origin',
       'gh pr create --title',
+      'git worktree remove --force',
     ]);
-    expect((await openBadgePr(checkout, ['a'], ['@scope/a', 'b'], ok)).branch).toBe('rgstr-badges');
+    expect((await openBadgePr(checkout, [{ file: '/work/ts-rust/a/README.md', name: '@scope/a', badge }, { file: '/work/ts-rust/b/README.md', name: 'b', badge }], ok)).branch).toBe('rgstr-badges');
 
     const missing = (async () => {
       throw Object.assign(new Error('spawn gh ENOENT'), { code: 'ENOENT' });
     }) as never;
-    expect(await openBadgePr(checkout, ['README.md'], ['tsc-rs'], missing)).toEqual({ url: null, branch: 'rgstr-badge-tsc-rs', reason: '`gh` is not on PATH' });
+    expect(await openBadgePr(checkout, [{ file: '/work/ts-rust/README.md', name: 'tsc-rs', badge: 'x' }], missing)).toEqual({ url: null, branch: 'rgstr-badge-tsc-rs', reason: '`gh` is not on PATH' });
     const loggedOut = (async () => {
       throw Object.assign(new Error('You are not logged into any GitHub hosts'), { code: 1 });
     }) as never;
-    expect((await openBadgePr(checkout, ['README.md'], ['tsc-rs'], loggedOut)).reason).toMatch(/not signed in/);
+    expect((await openBadgePr(checkout, [{ file: '/work/ts-rust/README.md', name: 'tsc-rs', badge: 'x' }], loggedOut)).reason).toMatch(/not signed in/);
   });
 });
 
