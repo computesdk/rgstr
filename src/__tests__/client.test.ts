@@ -206,6 +206,7 @@ describe('sameRoutes', () => {
     expect(sameRoutes([a, b], [b, a])).toBe(false);
     expect(sameRoutes([a], [{ ...a, upstreamName: 'x' }])).toBe(false);
     expect(sameRoutes([a], [{ ...a, id: 'r9' }])).toBe(false);
+    expect(sameRoutes([a], [{ ...a, position: 3 }])).toBe(false);
     expect(sameRoutes([], [])).toBe(true);
   });
 });
