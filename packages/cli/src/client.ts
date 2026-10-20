@@ -24,13 +24,30 @@ export class RgstrCliError extends Error {
   constructor(
     public code: RgstrCliErrorCode,
     message: string,
+    /** The next step, printed last, like an API error's `hint`. */
+    public hint?: string,
   ) {
     super(message);
     this.name = 'RgstrCliError';
   }
 }
 
+/** What rgstr.org answers with on every failure: `code` to branch on, `hint`
+ *  the next step (follow it), `requestId` to quote when reporting a problem. */
+export interface ApiErrorBody {
+  error?: string;
+  code?: string;
+  hint?: string;
+  requestId?: string;
+  details?: unknown;
+}
+
 export class RgstrApiError extends Error {
+  /** Stable machine-readable code from the API (`not_signed_in`, `claim_pending`, …). */
+  readonly code: string | undefined;
+  /** The next step, as the API said it. */
+  readonly hint: string | undefined;
+  readonly requestId: string | undefined;
   constructor(
     public status: number,
     message: string,
@@ -38,6 +55,14 @@ export class RgstrApiError extends Error {
   ) {
     super(message);
     this.name = 'RgstrApiError';
+    const b = body && typeof body === 'object' ? (body as ApiErrorBody) : {};
+    this.code = typeof b.code === 'string' ? b.code : undefined;
+    this.hint = typeof b.hint === 'string' ? b.hint : undefined;
+    this.requestId = typeof b.requestId === 'string' ? b.requestId : undefined;
+  }
+  /** `details` the API attached (a check-proof's outcome, a validation list). */
+  get details(): unknown {
+    return this.body && typeof this.body === 'object' ? (this.body as ApiErrorBody).details : undefined;
   }
 }
 
@@ -200,10 +225,32 @@ export class RgstrClient {
   }
 }
 
-/** Shape commands print when something goes wrong; same envelope as `compute`. */
-export function toErrorEnvelope(err: unknown): { error: string; code?: string; status?: number } {
-  if (err instanceof RgstrCliError) return { error: err.message, code: err.code };
-  if (err instanceof RgstrApiError) return { error: err.message, status: err.status };
+/** Shape commands print when something goes wrong; same envelope as `compute`
+ *  and as the API itself: `code` to branch on, `hint` the next step. */
+export interface ErrorEnvelope {
+  error: string;
+  code?: string;
+  hint?: string;
+  status?: number;
+  requestId?: string;
+}
+
+export function toErrorEnvelope(err: unknown): ErrorEnvelope {
+  if (err instanceof RgstrCliError) return { error: err.message, code: err.code, ...(err.hint ? { hint: err.hint } : {}) };
+  if (err instanceof RgstrApiError) {
+    return {
+      error: err.message,
+      status: err.status,
+      ...(err.code ? { code: err.code } : {}),
+      ...(err.hint ? { hint: err.hint } : {}),
+      ...(err.requestId ? { requestId: err.requestId } : {}),
+    };
+  }
   if (err instanceof Error) return { error: err.message };
   return { error: String(err) };
+}
+
+/** The lines a person reads for a failure: the message, then the next step last. */
+export function renderError(env: ErrorEnvelope): string {
+  return env.hint ? `Error: ${env.error}\n${env.hint}` : `Error: ${env.error}`;
 }

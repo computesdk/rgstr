@@ -28,11 +28,34 @@ Install this skill: `npx skills add computesdk/rgstr --skill rgstr`
   to approve it yourself.
 - Never print or commit a token. The proof token (`rgstr_…`) belongs in the
   badge URL only.
+- Every API error is JSON with `code` and `hint`; the CLI prints the hint as
+  its last line. The hint is the next step: follow it.
 
 ## Prerequisites
 
 Node 18+. Every command below is `npx @rgstr/cli@latest <command>`;
 `npm i -g @rgstr/cli` installs it as `rgstr`. Every command takes `--json`.
+
+## Without a shell: MCP
+
+`@rgstr/mcp` is the same CLI as MCP tools over stdio, for an agent that
+cannot run commands. Configure it (Claude Desktop, Cursor, Devin and any
+other MCP client take this shape):
+
+```json
+{ "mcpServers": { "rgstr": { "command": "npx", "args": ["-y", "@rgstr/mcp"] } } }
+```
+
+Reads: `rgstr_whois`, `rgstr_search`, `rgstr_check`. Changes are two tools:
+`rgstr_claim_plan` / `rgstr_claim_apply`, `rgstr_setup_plan` /
+`rgstr_setup_apply`, `rgstr_route_plan` / `rgstr_route_apply`. The `_plan`
+tools are free — they show exactly what would be filed or written and change
+nothing; the `_apply` tools file and write exactly that. Show the user the
+plan and call `_apply` only after they confirm, the same rule as `--yes`.
+`rgstr_claim_check` records the proof and can complete the claim. Writes need
+the stored login: when a tool answers `no_credentials`, the user runs
+`npx @rgstr/cli@latest login` (or `rgstr_login` returns the URL and code for
+them). Errors come back as `isError` results with the same `code` + `hint`.
 
 ## 1. Claim a name
 
@@ -93,7 +116,7 @@ No login needed.
 
 - `GET https://rgstr.org/api/v1/registry/whois/<name>`: who claims a name,
   its trust (`unclaimed` / `claimed` / `verified`), where it routes, whether
-  it is disputed. Scoped names go as `@scope%2Fname`.
+  a claim is under review. Scoped names go as `@scope%2Fname`.
 - `GET https://rgstr.org/api/registry/-/v1/search?text=<q>`: claimed names
   first.
 - Any page with `Accept: text/markdown`: `https://rgstr.org/registry/<name>`,

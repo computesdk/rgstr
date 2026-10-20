@@ -43,10 +43,24 @@ beforeAll(async () => {
       if (req.method === 'GET' && url.pathname === '/api/v1/registry/claims') return json(200, { pending, held: [] });
       if (req.method === 'POST' && url.pathname === '/api/v1/registry/claims') {
         const name = (body as { name: string }).name;
+        if (name === 'taken') {
+          return json(409, { error: 'You already have a claim for "taken" under review', code: 'claim_pending', message: 'You already have a claim for "taken" under review', hint: 'Poll GET /api/v1/registry/claims/req-0009/check-proof or run `rgstr claim --check taken`', requestId: 'req_test0001' });
+        }
         return json(201, { request: { id: 'req-0001-abcd', name, status: 'pending', verification: 'unverified' }, dispute: null, proof: { token: TOKEN }, url: `${base}/registry/${name}` });
       }
       if (req.method === 'POST' && /^\/api\/v1\/registry\/claims\/[^/]+\/check-proof$/.test(url.pathname)) {
-        return json(200, { outcome: { kind: 'not_found', checked: ['npm'], failed: [] }, request: pending[0] });
+        // The platform's answer when the badge is not there yet: 422 with the outcome in details and the next step in hint.
+        return json(422, {
+          error: 'No rgstr badge for tsc-rs in the README rgstr reads',
+          code: 'proof_not_found',
+          message: 'No rgstr badge for tsc-rs in the README rgstr reads',
+          hint: 'Put the badge from the plan in the README rgstr reads (https://www.npmjs.com/package/tsc-rs) and check again',
+          requestId: 'req_test0002',
+          details: { outcome: { kind: 'not_found', checked: ['npm'], failed: [] }, request: pending[0] },
+        });
+      }
+      if (req.method === 'GET' && url.pathname === '/api/v1/registry/whois/nope') {
+        return json(404, { error: 'No package named "nope" on npm or PyPI', code: 'name_unknown', message: 'No package named "nope" on npm or PyPI', hint: 'No npm or PyPI package has this name; check the spelling at https://rgstr.org/registry/nope', requestId: 'req_test0003' });
       }
       if (req.method === 'GET' && url.pathname.startsWith('/api/v1/registry/whois/')) {
         return json(200, { name: decodeURIComponent(url.pathname.split('/').pop()!), url: `${base}/registry/x`, trust: 'unclaimed', state: 'unclaimed', holder: null, routes: [], hiddenCopies: null });
@@ -224,9 +238,42 @@ describe('rgstr claim files nothing until --yes', () => {
     expect(claimPosts()).toHaveLength(0);
     pending = [{ id: 'req-0002-efgh', name: 'tsc-rs', status: 'pending', verification: 'unverified', createdAt: '2026-10-20T00:00:00Z', proof: { token: TOKEN } }];
     const r = await rgstr(['claim', '--check'], dir);
+    expect(r.code).toBe(0);
     expect(r.stdout).toContain('tsc-rs: no proof found yet');
+    // The 422's hint is the last line: the next step, as the API said it.
+    expect(r.stdout.trim().split('\n').pop()).toBe('Put the badge from the plan in the README rgstr reads (https://www.npmjs.com/package/tsc-rs) and check again');
     expect(claimPosts()).toHaveLength(0);
     expect(writes().map((h) => h.path)).toEqual(['/api/v1/registry/claims/req-0002-efgh/check-proof']);
+    const j = await rgstr(['--json', 'claim', '--check'], dir);
+    expect(j.code).toBe(0);
+    expect(JSON.parse(j.stdout).outcome.kind).toBe('not_found');
+  });
+});
+
+describe('API errors print code + hint', () => {
+  it('the hint is the last line a person sees', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'rgstr-empty-'));
+    const r = await rgstr(['claim', 'taken', '--yes'], dir);
+    expect(r.code).toBe(1);
+    const lines = r.stderr.trim().split('\n');
+    expect(lines[0]).toBe('Error: You already have a claim for "taken" under review');
+    expect(lines[lines.length - 1]).toBe('Poll GET /api/v1/registry/claims/req-0009/check-proof or run `rgstr claim --check taken`');
+    const w = await rgstr(['whois', 'nope'], dir);
+    expect(w.code).toBe(1);
+    expect(w.stderr.trim().split('\n').pop()).toBe('No npm or PyPI package has this name; check the spelling at https://rgstr.org/registry/nope');
+  });
+
+  it('--json carries code, hint, requestId and status', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'rgstr-empty-'));
+    const r = await rgstr(['--json', 'whois', 'nope'], dir);
+    expect(r.code).toBe(1);
+    expect(JSON.parse(r.stdout)).toEqual({
+      error: 'No package named "nope" on npm or PyPI',
+      status: 404,
+      code: 'name_unknown',
+      hint: 'No npm or PyPI package has this name; check the spelling at https://rgstr.org/registry/nope',
+      requestId: 'req_test0003',
+    });
   });
 });
 

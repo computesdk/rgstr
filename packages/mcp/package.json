@@ -1,0 +1,56 @@
+{
+  "name": "@rgstr/mcp",
+  "version": "0.0.1",
+  "description": "rgstr (https://rgstr.org) as MCP tools: whois, search, check, and plan/apply for claim, setup and routes \u2014 confirm before apply.",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/computesdk/rgstr",
+    "directory": "packages/mcp"
+  },
+  "homepage": "https://rgstr.org",
+  "keywords": [
+    "rgstr",
+    "mcp",
+    "model-context-protocol",
+    "npm",
+    "pypi",
+    "registry"
+  ],
+  "bin": {
+    "rgstr-mcp": "dist/index.js"
+  },
+  "main": "dist/index.js",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.1",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "eslint": "^8.37.0",
+    "rimraf": "^5.0.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^1.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "pnpm": ">=9.0.0"
+  }
+}
