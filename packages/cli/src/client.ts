@@ -18,7 +18,9 @@ export type RgstrCliErrorCode =
   | 'not_found'
   | 'not_holder'
   | 'not_configured'
-  | 'conflict';
+  | 'conflict'
+  | 'plan_stale'
+  | 'no_organization';
 
 export class RgstrCliError extends Error {
   constructor(

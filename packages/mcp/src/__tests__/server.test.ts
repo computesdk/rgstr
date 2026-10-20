@@ -230,6 +230,21 @@ describe('routes and setup: plan then apply', () => {
     expect(await fs.readFile(path.join(dir, '.npmrc'), 'utf8')).toContain(`registry=${BASE}/api/registry`);
   });
 
+  it('rgstr_claim_apply takes only a plan_id, and refuses when the README changed since the plan', async () => {
+    const client = await connect();
+    const dir = await pkgDir();
+    const noPlan = await call(client, 'rgstr_claim_apply', {});
+    expect(noPlan.isError).toBe(true);
+    const plan = await call(client, 'rgstr_claim_plan', { cwd: dir });
+    await fs.appendFile(path.join(dir, 'README.md'), '\nEdited after the plan.\n');
+    const r = await call(client, 'rgstr_claim_apply', { plan_id: plan.structuredContent?.plan_id });
+    expect(r.isError).toBe(true);
+    expect(JSON.parse(textOf(r).split('\n')[0]).code).toBe('plan_stale');
+    expect(textOf(r).split('\n').pop()).toBe('Run rgstr_claim_plan again and show the user the new plan');
+    expect(writes()).toEqual([]);
+    expect(await fs.readFile(path.join(dir, 'README.md'), 'utf8')).not.toContain(TOKEN);
+  });
+
   it('rgstr_setup_apply refuses a plan whose files changed in the meantime', async () => {
     const client = await connect({ baseUrl: BASE });
     const dir = await pkgDir();
@@ -237,7 +252,8 @@ describe('routes and setup: plan then apply', () => {
     await fs.writeFile(path.join(dir, '.npmrc'), 'registry=https://example.com/\n');
     const r = await call(client, 'rgstr_setup_apply', { plan_id: plan.structuredContent?.plan_id });
     expect(r.isError).toBe(true);
-    expect(textOf(r)).toContain('Call rgstr_setup_plan again');
+    expect(JSON.parse(textOf(r).split('\n')[0]).code).toBe('plan_stale');
+    expect(textOf(r)).toContain('Run rgstr_setup_plan again and show the user the new plan');
     expect(await fs.readFile(path.join(dir, '.npmrc'), 'utf8')).toBe('registry=https://example.com/\n');
   });
 
@@ -249,7 +265,7 @@ describe('routes and setup: plan then apply', () => {
     process.env.RGSTR_ORG = 'other';
     const r = await call(client, 'rgstr_claim_apply', { plan_id: plan.structuredContent?.plan_id });
     expect(r.isError).toBe(true);
-    expect(textOf(r)).toContain('Call rgstr_claim_plan again');
+    expect(JSON.parse(textOf(r).split('\n')[0]).code).toBe('plan_stale');
     expect(writes()).toEqual([]);
     expect(await fs.readFile(path.join(dir, 'README.md'), 'utf8')).not.toContain(TOKEN);
   });

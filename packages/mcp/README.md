@@ -52,8 +52,11 @@ user to approve; the login is the user's — the agent hands it over and waits.
 | `rgstr_login` | device-code login: returns the URL and code | no |
 
 Each `_plan` tool returns the plan as text (what the CLI prints) and as JSON
-with a `plan_id`; the matching `_apply` tool takes that `plan_id` and applies
-exactly that plan, once. The rule, in every apply tool's description and in
+with a `plan_id`; the matching `_apply` tool takes only that `plan_id` and
+applies exactly that plan, once. There is no apply without a plan. If a README,
+config file or the login changed since the plan was shown, apply answers
+`isError` with code `plan_stale` and the hint "Run rgstr_claim_plan again and
+show the user the new plan" (or the matching `_plan` tool) — nothing is written. The rule, in every apply tool's description and in
 the server's instructions: **show the user the plan and get their
 confirmation before calling apply.** This mirrors
 [`skills/rgstr/SKILL.md`](../../skills/rgstr/SKILL.md) and

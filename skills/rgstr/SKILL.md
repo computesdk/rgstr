@@ -50,8 +50,11 @@ Reads: `rgstr_whois`, `rgstr_search`, `rgstr_check`. Changes are two tools:
 `rgstr_claim_plan` / `rgstr_claim_apply`, `rgstr_setup_plan` /
 `rgstr_setup_apply`, `rgstr_route_plan` / `rgstr_route_apply`. The `_plan`
 tools are free — they show exactly what would be filed or written and change
-nothing; the `_apply` tools file and write exactly that. Show the user the
-plan and call `_apply` only after they confirm, the same rule as `--yes`.
+nothing and return a `plan_id`; the `_apply` tools take only that `plan_id`
+and file and write exactly that plan, once. Show the user the plan and call
+`_apply` only after they confirm. If a README, config file or the login
+changed since the plan, apply answers `plan_stale`: run the `_plan` tool again
+and show the user the new plan.
 `rgstr_claim_check` records the proof and can complete the claim. Writes need
 the stored login: when a tool answers `no_credentials`, the user runs
 `npx @rgstr/cli@latest login` (or `rgstr_login` returns the URL and code for

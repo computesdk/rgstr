@@ -58,7 +58,7 @@ export const INSTRUCTIONS = [
 ].join('\n');
 
 const APPLY_RULE = (plan: string) =>
-  `Changes state. Call ${plan} first, show the user that plan, and only call this after they have confirmed it; it files and writes exactly what the plan said. ${CONFIRM_FIRST}`;
+  `Changes state. Call ${plan} first, show the user that plan, and only call this after they have confirmed it; it takes that plan_id and does exactly what the plan said, once. If the files or the login changed since, it answers plan_stale: run ${plan} again and show the new plan. ${CONFIRM_FIRST}`;
 
 export interface ServerOptions extends GlobalOptions {
   /** Directory tools default to when a call names no cwd. */
@@ -68,7 +68,7 @@ export interface ServerOptions extends GlobalOptions {
 type SetupArgs = { cwd?: string; npm?: boolean; pip?: boolean; off?: boolean };
 
 type StoredPlan =
-  | { kind: 'claim'; plan: ClaimPlan; opts: ClaimOpts; text: string; asWho: string | null; baseUrl: string }
+  | { kind: 'claim'; plan: ClaimPlan; opts: ClaimOpts; text: string; asWho: string | null; baseUrl: string; fingerprint: string }
   | { kind: 'route'; plan: RoutePlan; baseUrl: string }
   | { kind: 'setup'; changes: UseChange[]; origin: string; off: boolean; args: SetupArgs; fingerprint: string };
 
@@ -97,7 +97,7 @@ const collector = () => {
 };
 
 const cwdSchema = z.string().optional().describe('Project directory (absolute). Defaults to the directory the server runs in.');
-const planIdSchema = z.string().optional().describe('The plan_id a *_plan call returned; applies exactly that plan. Without it the plan is recomputed from the other arguments.');
+const planIdSchema = z.string().describe('The plan_id the matching *_plan call returned, after the user has seen that plan and confirmed it. Apply does exactly what that plan said; a plan whose files or target changed since answers plan_stale.');
 
 export function createServer(options: ServerOptions = {}, version = '0.0.0'): McpServer {
   const server = new McpServer({ name: 'rgstr', version }, { instructions: INSTRUCTIONS });
@@ -116,11 +116,15 @@ export function createServer(options: ServerOptions = {}, version = '0.0.0'): Mc
     return stored as Extract<StoredPlan, { kind: K }>;
   };
   /** A plan made for one organization and host is applied to that one only. */
+  const stale = (plan: string, why: string) => new RgstrCliError('plan_stale', `${why} Nothing applied.`, `Run ${plan} again and show the user the new plan`);
   const sameTarget = (c: RgstrClient, stored: { asWho: string | null; baseUrl: string }, plan: string) => {
     if (c.auth.org !== stored.asWho || c.baseUrl !== stored.baseUrl) {
-      throw new RgstrCliError('conflict', `The plan was made for ${stored.asWho ?? 'no organization'} at ${stored.baseUrl}; the login now acts for ${c.auth.org ?? 'no organization'} at ${c.baseUrl}. Nothing applied.`, `Call ${plan} again and show the user the new plan`);
+      throw stale(plan, `The plan was made for ${stored.asWho ?? 'no organization'} at ${stored.baseUrl}; the login now acts for ${c.auth.org ?? 'no organization'} at ${c.baseUrl}.`);
     }
   };
+  /** The READMEs a claim plan would edit, byte for byte, so apply writes only what the user saw. */
+  const claimFingerprint = async (plan: ClaimPlan) =>
+    JSON.stringify(await Promise.all(plan.previews.map(async (p) => [p.t.name, p.readme?.file ?? null, p.readme ? await fs.readFile(p.readme.file, 'utf8').catch(() => null) : null])));
   const dirOf = (cwd?: string, manifest?: string) => path.resolve(cwd ?? (manifest ? path.dirname(manifest) : options.cwd ?? process.cwd()));
   const client = async (optional = false) => new RgstrClient(await resolveAuth({ ...options, optional }));
   const run = async (fn: () => Promise<CallToolResult>): Promise<CallToolResult> => {
@@ -231,7 +235,7 @@ export function createServer(options: ServerOptions = {}, version = '0.0.0'): Mc
         const body = [...lines];
         if (!plan.what) body.push('', 'Nothing to file, nothing to write: already under review or verified, and the badge is in place.');
         else body.push('', `Nothing filed, nothing written — that is the plan. After the user confirms, call rgstr_claim_apply with plan_id to ${plan.what}.`);
-        const plan_id = plan.what ? remember({ kind: 'claim', plan, opts, text: lines.join('\n'), asWho: c.auth.org, baseUrl: c.baseUrl }) : null;
+        const plan_id = plan.what ? remember({ kind: 'claim', plan, opts, text: lines.join('\n'), asWho: c.auth.org, baseUrl: c.baseUrl, fingerprint: await claimFingerprint(plan) }) : null;
         return text(body, {
           plan_id,
           what: plan.what || null,
@@ -247,26 +251,17 @@ export function createServer(options: ServerOptions = {}, version = '0.0.0'): Mc
     'rgstr_claim_apply',
     {
       title: 'File the claim and write the badge',
-      description: `Files the claim and writes the proof badge into the README — exactly what rgstr_claim_plan showed, nothing else. ${APPLY_RULE('rgstr_claim_plan')} Optionally opens the badge pull request (pr: true, needs gh).`,
-      inputSchema: { plan_id: planIdSchema, ...claimOptsSchema, pr: z.boolean().optional().describe('After writing: branch, commit, push and open the pull request with gh.') },
+      description: `Files the claim and writes the proof badge into the README — exactly what rgstr_claim_plan showed, nothing else. ${APPLY_RULE('rgstr_claim_plan')} Takes only the plan_id; the plan's own options (pr: true opens the badge pull request with gh) are what gets applied.`,
+      inputSchema: { plan_id: planIdSchema },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
-    async ({ plan_id, ...args }) =>
+    async ({ plan_id }) =>
       run(async () => {
-        let c: RgstrClient;
-        let plan: ClaimPlan;
-        let opts: ClaimOpts;
-        if (plan_id) {
-          const stored = take(plan_id, 'claim');
-          c = await client();
-          sameTarget(c, stored, 'rgstr_claim_plan');
-          plan = stored.plan;
-          opts = { ...stored.opts, pr: args.pr ?? stored.opts.pr };
-        } else {
-          const r = await planClaim(args);
-          if (r.kind === 'workspace') throw new RgstrCliError('invalid_argument', 'A workspace root: nothing applied.', 'Pass all: true, or the cwd of one package');
-          ({ c, plan, opts } = r);
-        }
+        const stored = take(plan_id, 'claim');
+        const c = await client();
+        sameTarget(c, stored, 'rgstr_claim_plan');
+        if ((await claimFingerprint(stored.plan)) !== stored.fingerprint) throw stale('rgstr_claim_plan', 'A README changed since the plan was made.');
+        const { plan, opts } = stored;
         if (!plan.what) return text('Nothing to file, nothing to write.', { applied: false, packages: plan.previews.map((p) => previewJson(c, p)) });
         const { lines, say } = collector();
         const { results, pr } = await applyClaims(c, say, opts, plan);
@@ -354,25 +349,18 @@ export function createServer(options: ServerOptions = {}, version = '0.0.0'): Mc
     'rgstr_setup_apply',
     {
       title: 'Write the rgstr lines',
-      description: `Writes (or removes) the .npmrc / pip.conf lines rgstr_setup_plan showed — exactly those lines, nothing else; \`off\` undoes it. ${APPLY_RULE('rgstr_setup_plan')}`,
-      inputSchema: { plan_id: planIdSchema, ...setupSchema },
+      description: `Writes (or removes) the .npmrc / pip.conf lines rgstr_setup_plan showed — exactly those lines, nothing else (a plan made with off: true removes them). ${APPLY_RULE('rgstr_setup_plan')}`,
+      inputSchema: { plan_id: planIdSchema },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
-    async ({ plan_id, ...args }) =>
+    async ({ plan_id }) =>
       run(async () => {
-        let origin: string;
-        let changes: UseChange[];
-        let off: boolean;
-        if (plan_id) {
-          const stored = take(plan_id, 'setup');
-          // The files may have moved since the plan was shown: plan again and
-          // write only if it is still the same plan, byte for byte.
-          const now = await planSetup(stored.args);
-          if (now.origin !== stored.origin || (await useFingerprint(now.changes)) !== stored.fingerprint) {
-            throw new RgstrCliError('conflict', 'The project changed since the plan was made; nothing written.', 'Call rgstr_setup_plan again and show the user the new plan');
-          }
-          ({ origin, changes, off } = stored);
-        } else ({ origin, changes, off } = { ...(await planSetup(args)), off: !!args.off });
+        const stored = take(plan_id, 'setup');
+        // The files may have moved since the plan was shown: plan again and
+        // write only if it is still the same plan, byte for byte.
+        const now = await planSetup(stored.args);
+        if (now.origin !== stored.origin || (await useFingerprint(now.changes)) !== stored.fingerprint) throw stale('rgstr_setup_plan', 'The project changed since the plan was made.');
+        const { origin, changes, off } = stored;
         const pending = changes.filter((c) => c.action === 'written' || c.action === 'removed');
         if (pending.length === 0) return text(describeUse(changes), { origin, changes: useJson(changes), applied: false });
         await applyUse(changes);
@@ -425,23 +413,17 @@ export function createServer(options: ServerOptions = {}, version = '0.0.0'): Mc
     {
       title: 'Apply the route change',
       description: `Replaces the name's route list with the one rgstr_route_plan showed (one PUT; refuses if the routes changed in the meantime). ${APPLY_RULE('rgstr_route_plan')}`,
-      inputSchema: { plan_id: planIdSchema, ...routeSchema, name: routeSchema.name.optional() },
+      inputSchema: { plan_id: planIdSchema },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
-    async ({ plan_id, name, to, rm }) =>
+    async ({ plan_id }) =>
       run(async () => {
         const c = await client();
-        let plan: RoutePlan;
-        if (plan_id) {
-          const stored = take(plan_id, 'route');
-          if (c.baseUrl !== stored.baseUrl) throw new RgstrCliError('conflict', `The plan was made for ${stored.baseUrl}. Nothing applied.`, 'Call rgstr_route_plan again');
-          plan = stored.plan;
-        }
-        else {
-          if (!name) throw new RgstrCliError('invalid_argument', 'Pass plan_id or name.', 'Call rgstr_route_plan first');
-          plan = await planRoutes(c, name, { to, rm });
-          if (!plan.changed) return text(`${name}: nothing to change.`, { name, packageId: plan.packageId, routes: plan.current, applied: false });
-        }
+        const stored = take(plan_id, 'route');
+        if (c.baseUrl !== stored.baseUrl) throw stale('rgstr_route_plan', `The plan was made for ${stored.baseUrl}.`);
+        const { plan } = stored;
+        if (!plan.changed) return text(`${plan.name}: nothing to change.`, { name: plan.name, packageId: plan.packageId, routes: plan.current, applied: false });
+        // applyRoutes reads the routes again and refuses when they moved since the plan.
         const routes = await applyRoutes(c, plan);
         return text(`${plan.name}: routes applied (${routes.length}).`, { name: plan.name, packageId: plan.packageId, routes, applied: true });
       }),
