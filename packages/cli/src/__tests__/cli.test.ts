@@ -44,7 +44,7 @@ beforeAll(async () => {
       if (req.method === 'POST' && url.pathname === '/api/v1/registry/claims') {
         const name = (body as { name: string }).name;
         if (name === 'taken') {
-          return json(409, { error: 'You already have a claim for "taken" under review', code: 'claim_pending', message: 'You already have a claim for "taken" under review', hint: 'Poll GET /api/v1/registry/claims/req-0009/check-proof or run `rgstr claim --check taken`', requestId: 'req_test0001' });
+          return json(409, { error: 'You already have a claim for "taken" under review', code: 'claim_pending', message: 'You already have a claim for "taken" under review', hint: 'Poll POST /api/v1/registry/claims/req-0009/check-proof or run `rgstr claim --check taken`', requestId: 'req_test0001' });
         }
         return json(201, { request: { id: 'req-0001-abcd', name, status: 'pending', verification: 'unverified' }, dispute: null, proof: { token: TOKEN }, url: `${base}/registry/${name}` });
       }
@@ -257,7 +257,7 @@ describe('API errors print code + hint', () => {
     expect(r.code).toBe(1);
     const lines = r.stderr.trim().split('\n');
     expect(lines[0]).toBe('Error: You already have a claim for "taken" under review');
-    expect(lines[lines.length - 1]).toBe('Poll GET /api/v1/registry/claims/req-0009/check-proof or run `rgstr claim --check taken`');
+    expect(lines[lines.length - 1]).toBe('Poll POST /api/v1/registry/claims/req-0009/check-proof or run `rgstr claim --check taken`');
     const w = await rgstr(['whois', 'nope'], dir);
     expect(w.code).toBe(1);
     expect(w.stderr.trim().split('\n').pop()).toBe('No npm or PyPI package has this name; check the spelling at https://rgstr.org/registry/nope');

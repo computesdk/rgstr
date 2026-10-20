@@ -121,9 +121,10 @@ describe('reads', () => {
     const r = await call(client, 'rgstr_whois', { name: 'nope' });
     expect(r.isError).toBe(true);
     const lines = textOf(r).split('\n');
-    expect(lines[0]).toBe('Error: No package named "nope" on npm or PyPI');
-    expect(lines[1]).toBe('No npm or PyPI package has this name; check the spelling at https://rgstr.org/registry/nope');
-    expect(JSON.parse(lines.pop()!)).toEqual({
+    // The hint is the last line, as in the CLI; the envelope comes first.
+    expect(lines[lines.length - 2]).toBe('Error: No package named "nope" on npm or PyPI');
+    expect(lines[lines.length - 1]).toBe('No npm or PyPI package has this name; check the spelling at https://rgstr.org/registry/nope');
+    expect(JSON.parse(lines[0])).toEqual({
       error: 'No package named "nope" on npm or PyPI',
       status: 404,
       code: 'name_unknown',
@@ -189,7 +190,8 @@ describe('claim: plan files nothing, apply posts exactly the plan', () => {
     const r = await call(client, 'rgstr_claim_plan', { cwd: await pkgDir() });
     expect(r.isError).toBe(true);
     expect(textOf(r)).toContain(LOGIN_HINT);
-    expect(JSON.parse(textOf(r).split('\n').pop()!)).toEqual({ error: 'Not logged in.', code: 'no_credentials', hint: 'Run `npx @rgstr/cli@latest login`' });
+    expect(textOf(r).split('\n').pop()).toBe(LOGIN_HINT);
+    expect(JSON.parse(textOf(r).split('\n')[0])).toEqual({ error: 'Not logged in.', code: 'no_credentials', hint: 'Run `npx @rgstr/cli@latest login`' });
     expect(writes()).toEqual([]);
   });
 });
@@ -226,5 +228,29 @@ describe('routes and setup: plan then apply', () => {
     const r = await call(client, 'rgstr_setup_apply', { plan_id: plan.structuredContent?.plan_id });
     expect(textOf(r)).toContain('.npmrc: written');
     expect(await fs.readFile(path.join(dir, '.npmrc'), 'utf8')).toContain(`registry=${BASE}/api/registry`);
+  });
+
+  it('rgstr_setup_apply refuses a plan whose files changed in the meantime', async () => {
+    const client = await connect({ baseUrl: BASE });
+    const dir = await pkgDir();
+    const plan = await call(client, 'rgstr_setup_plan', { cwd: dir });
+    await fs.writeFile(path.join(dir, '.npmrc'), 'registry=https://example.com/\n');
+    const r = await call(client, 'rgstr_setup_apply', { plan_id: plan.structuredContent?.plan_id });
+    expect(r.isError).toBe(true);
+    expect(textOf(r)).toContain('Call rgstr_setup_plan again');
+    expect(await fs.readFile(path.join(dir, '.npmrc'), 'utf8')).toBe('registry=https://example.com/\n');
+  });
+
+  it('a claim plan made for one organization is not applied as another', async () => {
+    const dir = await pkgDir();
+    process.env.RGSTR_ORG = 'acme';
+    const client = await connect({ baseUrl: BASE, token: 'x' });
+    const plan = await call(client, 'rgstr_claim_plan', { cwd: dir });
+    process.env.RGSTR_ORG = 'other';
+    const r = await call(client, 'rgstr_claim_apply', { plan_id: plan.structuredContent?.plan_id });
+    expect(r.isError).toBe(true);
+    expect(textOf(r)).toContain('Call rgstr_claim_plan again');
+    expect(writes()).toEqual([]);
+    expect(await fs.readFile(path.join(dir, 'README.md'), 'utf8')).not.toContain(TOKEN);
   });
 });

@@ -20,6 +20,7 @@ import {
 } from './client.js';
 import { fmtDownloads, kv, printJson, table } from './output.js';
 import { formatRouteRow } from './routes.js';
+import { rememberOrganization, type MeResponse } from './login.js';
 import { applyUse, planUse, projectStatus, type UseChange } from './use.js';
 import { confirm, isInteractive } from './prompt.js';
 import { checkProject } from './check-flow.js';
@@ -73,14 +74,7 @@ async function loginFlow(): Promise<void> {
           out(`User code: ${code.user_code}`);
         },
       });
-      const me = await new RgstrClient({ baseUrl, token: creds.token, kind: 'device', org: null }).get<MeResponse>('/api/v1/me');
-      const cfg = await loadConfig();
-      const slugs = me.organizations.map((o) => o.slug);
-      // A remembered organization from a different account would make every write 403.
-      const keep = cfg.org && slugs.includes(cfg.org) ? cfg.org : undefined;
-      const next = keep ?? (slugs.length === 1 ? slugs[0] : undefined);
-      if (next !== cfg.org) await saveConfig({ ...cfg, org: next });
-      const org = opts.org || process.env.RGSTR_ORG || next || null;
+      const { me, org } = await rememberOrganization(baseUrl, creds.token, opts);
       const platformClient = creds.clientId === PLATFORM_OAUTH_CLIENT_ID;
       if (opts.json) printJson({ ok: true, baseUrl, user: me.user, org, organizations: me.organizations, clientId: creds.clientId, scope: creds.scope ?? null });
       else {
@@ -113,11 +107,6 @@ program
     else console.log('Logged out.');
   });
 
-interface MeResponse {
-  user: { id: string; email: string; name?: string | null };
-  activeOrganizationId: string | null;
-  organizations: Array<{ id: string; name: string; slug: string }>;
-}
 
 program
   .command('whoami')

@@ -12,6 +12,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import type { SearchObject, WhoisResponse } from '../../cli/src/api-types.js';
 import { deviceLogin } from '../../cli/src/auth.js';
+import { rememberOrganization } from '../../cli/src/login.js';
 import { checkProject } from '../../cli/src/check-flow.js';
 import {
   applyClaims,
@@ -63,10 +64,12 @@ export interface ServerOptions extends GlobalOptions {
   cwd?: string;
 }
 
+type SetupArgs = { cwd?: string; npm?: boolean; pip?: boolean; off?: boolean };
+
 type StoredPlan =
-  | { kind: 'claim'; plan: ClaimPlan; opts: ClaimOpts; text: string }
-  | { kind: 'route'; plan: RoutePlan }
-  | { kind: 'setup'; changes: UseChange[]; origin: string; off: boolean };
+  | { kind: 'claim'; plan: ClaimPlan; opts: ClaimOpts; text: string; asWho: string | null; baseUrl: string }
+  | { kind: 'route'; plan: RoutePlan; baseUrl: string }
+  | { kind: 'setup'; changes: UseChange[]; origin: string; off: boolean; args: SetupArgs };
 
 const text = (lines: string[] | string, data?: unknown): CallToolResult => {
   const body = Array.isArray(lines) ? lines.join('\n') : lines;
@@ -82,7 +85,8 @@ export function errorResult(err: unknown): CallToolResult {
   let env: ErrorEnvelope = toErrorEnvelope(err);
   if (err instanceof RgstrCliError && err.code === 'no_credentials') env = { error: 'Not logged in.', code: 'no_credentials', hint: LOGIN_HINT };
   else if (err instanceof RgstrApiError && err.status === 401) env = { ...env, hint: `${LOGIN_HINT}, then try again` };
-  return { content: [{ type: 'text', text: `${renderError(env)}\n\n${JSON.stringify(env)}` }], isError: true };
+  // The envelope first, the readable lines last: the hint is the last line, as in the CLI.
+  return { content: [{ type: 'text', text: `${JSON.stringify(env)}\n\n${renderError(env)}` }], isError: true };
 }
 
 const collector = () => {
@@ -109,6 +113,12 @@ export function createServer(options: ServerOptions = {}, version = '0.0.0'): Mc
     }
     plans.delete(id);
     return stored as Extract<StoredPlan, { kind: K }>;
+  };
+  /** A plan made for one organization and host is applied to that one only. */
+  const sameTarget = (c: RgstrClient, stored: { asWho: string | null; baseUrl: string }, plan: string) => {
+    if (c.auth.org !== stored.asWho || c.baseUrl !== stored.baseUrl) {
+      throw new RgstrCliError('conflict', `The plan was made for ${stored.asWho ?? 'no organization'} at ${stored.baseUrl}; the login now acts for ${c.auth.org ?? 'no organization'} at ${c.baseUrl}. Nothing applied.`, `Call ${plan} again and show the user the new plan`);
+    }
   };
   const dirOf = (cwd?: string, manifest?: string) => path.resolve(cwd ?? (manifest ? path.dirname(manifest) : options.cwd ?? process.cwd()));
   const client = async (optional = false) => new RgstrClient(await resolveAuth({ ...options, optional }));
@@ -220,7 +230,7 @@ export function createServer(options: ServerOptions = {}, version = '0.0.0'): Mc
         const body = [...lines];
         if (!plan.what) body.push('', 'Nothing to file, nothing to write: already under review or verified, and the badge is in place.');
         else body.push('', `Nothing filed, nothing written — that is the plan. After the user confirms, call rgstr_claim_apply with plan_id to ${plan.what}.`);
-        const plan_id = plan.what ? remember({ kind: 'claim', plan, opts, text: lines.join('\n') }) : null;
+        const plan_id = plan.what ? remember({ kind: 'claim', plan, opts, text: lines.join('\n'), asWho: c.auth.org, baseUrl: c.baseUrl }) : null;
         return text(body, {
           plan_id,
           what: plan.what || null,
@@ -248,6 +258,7 @@ export function createServer(options: ServerOptions = {}, version = '0.0.0'): Mc
         if (plan_id) {
           const stored = take(plan_id, 'claim');
           c = await client();
+          sameTarget(c, stored, 'rgstr_claim_plan');
           plan = stored.plan;
           opts = { ...stored.opts, pr: args.pr ?? stored.opts.pr };
         } else {
@@ -307,13 +318,14 @@ export function createServer(options: ServerOptions = {}, version = '0.0.0'): Mc
     }
     return lines;
   };
-  const planSetup = async (args: { cwd?: string; npm?: boolean; pip?: boolean; off?: boolean }) => {
+  const planSetup = async (args: SetupArgs) => {
     const origin = await resolveBaseUrl(options);
     assertHostAllowed(origin, options.allowUntrustedHost);
     const changes = await planUse({ dir: dirOf(args.cwd), origin, off: args.off, npm: args.npm, pip: args.pip });
     return { origin, changes, pending: changes.filter((c) => c.action === 'written' || c.action === 'removed') };
   };
   const useJson = (changes: UseChange[]) => changes.map(({ path: _path, after: _after, ...c }) => c);
+  const useFingerprint = (changes: UseChange[]) => JSON.stringify(changes.map((c) => [c.file, c.action, c.after ?? null]));
 
   server.registerTool(
     'rgstr_setup_plan',
@@ -328,7 +340,7 @@ export function createServer(options: ServerOptions = {}, version = '0.0.0'): Mc
       run(async () => {
         const { origin, changes, pending } = await planSetup(args);
         const lines = describeUse(changes);
-        const plan_id = pending.length ? remember({ kind: 'setup', changes, origin, off: !!args.off }) : null;
+        const plan_id = pending.length ? remember({ kind: 'setup', changes, origin, off: !!args.off, args }) : null;
         if (pending.length) lines.push('', 'Nothing written — that is the plan. After the user confirms, call rgstr_setup_apply with plan_id.');
         return text(lines, { plan_id, origin, changes: useJson(changes), applied: false });
       }),
@@ -344,7 +356,19 @@ export function createServer(options: ServerOptions = {}, version = '0.0.0'): Mc
     },
     async ({ plan_id, ...args }) =>
       run(async () => {
-        const { origin, changes, off } = plan_id ? take(plan_id, 'setup') : { ...(await planSetup(args)), off: !!args.off };
+        let origin: string;
+        let changes: UseChange[];
+        let off: boolean;
+        if (plan_id) {
+          const stored = take(plan_id, 'setup');
+          // The files may have moved since the plan was shown: plan again and
+          // write only if it is still the same plan, byte for byte.
+          const now = await planSetup(stored.args);
+          if (now.origin !== stored.origin || useFingerprint(now.changes) !== useFingerprint(stored.changes)) {
+            throw new RgstrCliError('conflict', 'The project changed since the plan was made; nothing written.', 'Call rgstr_setup_plan again and show the user the new plan');
+          }
+          ({ origin, changes, off } = stored);
+        } else ({ origin, changes, off } = { ...(await planSetup(args)), off: !!args.off });
         const pending = changes.filter((c) => c.action === 'written' || c.action === 'removed');
         if (pending.length === 0) return text(describeUse(changes), { origin, changes: useJson(changes), applied: false });
         await applyUse(changes);
@@ -380,7 +404,7 @@ export function createServer(options: ServerOptions = {}, version = '0.0.0'): Mc
         const c = await client();
         const plan = await planRoutes(c, name, { to, rm });
         if (!plan.changed) return text(plan.current.length ? `${name}: ${plan.current.length} route${plan.current.length === 1 ? '' : 's'}` : `${name}: no routes (default: npm:${name})`, { name, packageId: plan.packageId, routes: plan.current });
-        const plan_id = remember({ kind: 'route', plan });
+        const plan_id = remember({ kind: 'route', plan, baseUrl: c.baseUrl });
         return text([...renderRoutePlan(plan), '', 'Nothing changed — that is the plan. After the user confirms, call rgstr_route_apply with plan_id.'], {
           plan_id,
           name,
@@ -404,7 +428,11 @@ export function createServer(options: ServerOptions = {}, version = '0.0.0'): Mc
       run(async () => {
         const c = await client();
         let plan: RoutePlan;
-        if (plan_id) plan = take(plan_id, 'route').plan;
+        if (plan_id) {
+          const stored = take(plan_id, 'route');
+          if (c.baseUrl !== stored.baseUrl) throw new RgstrCliError('conflict', `The plan was made for ${stored.baseUrl}. Nothing applied.`, 'Call rgstr_route_plan again');
+          plan = stored.plan;
+        }
         else {
           if (!name) throw new RgstrCliError('invalid_argument', 'Pass plan_id or name.', 'Call rgstr_route_plan first');
           plan = await planRoutes(c, name, { to, rm });
@@ -432,21 +460,26 @@ export function createServer(options: ServerOptions = {}, version = '0.0.0'): Mc
         if (!login) {
           const baseUrl = await resolveBaseUrl(options);
           assertHostAllowed(baseUrl, options.allowUntrustedHost);
-          let prompt: { url: string; code: string } | null = null;
+          let promptArrived!: (p: { url: string; code: string }) => void;
+          const prompted = new Promise<{ url: string; code: string }>((resolve) => {
+            promptArrived = resolve;
+          });
           const done = deviceLogin({
             baseUrl,
-            onPrompt: (code) => {
-              prompt = { url: code.verification_uri_complete ?? code.verification_uri, code: code.user_code };
-            },
+            onPrompt: (code) => promptArrived({ url: code.verification_uri_complete ?? code.verification_uri, code: code.user_code }),
           })
+            // The same as `rgstr login`: the one organization the user has becomes the active one.
+            .then((creds) => rememberOrganization(baseUrl, creds.token, options))
             .then(() => undefined)
             .finally(() => {
               login = null;
             });
           done.catch(() => undefined);
-          // The prompt arrives before the first poll; wait for it, not for the user.
-          while (!prompt) await new Promise((r) => setTimeout(r, 20));
-          login = { ...(prompt as { url: string; code: string }), done };
+          // The prompt arrives before the first poll; wait for it (or for the
+          // login to fail before issuing one), not for the user.
+          const prompt = await Promise.race([prompted, done.then(() => null)]);
+          if (!prompt) throw new RgstrCliError('invalid_argument', 'The login ended before a code was issued.', 'Call rgstr_login again');
+          login = { ...prompt, done };
         }
         const { url, code } = login;
         return text(`Ask the user to open ${url} and enter the code ${code}. Once they approve, the login is stored; call the tool you wanted again.`, { url, code });
