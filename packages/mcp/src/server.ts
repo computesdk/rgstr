@@ -12,7 +12,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import type { SearchObject, WhoisResponse } from '../../cli/src/api-types.js';
-import { deviceLogin } from '../../cli/src/auth.js';
+import { DeviceFlowError, deviceLogin } from '../../cli/src/auth.js';
 import { rememberOrganization } from '../../cli/src/login.js';
 import { checkProject } from '../../cli/src/check-flow.js';
 import {
@@ -63,13 +63,29 @@ const APPLY_RULE = (plan: string) =>
 export interface ServerOptions extends GlobalOptions {
   /** Directory tools default to when a call names no cwd. */
   cwd?: string;
+  /** The device-code flow (tests inject one). */
+  loginFlow?: typeof deviceLogin;
+}
+
+/** What became of the last rgstr_login, so a later no_credentials can say. */
+export interface LoginOutcome {
+  state: 'waiting' | 'approved' | 'rejected' | 'expired' | 'failed';
+  url?: string;
+  code?: string;
+  /** The organization the login acts for (approved). */
+  organization?: string | null;
+  /** Why it failed (rejected / expired / failed). */
+  detail?: string;
+  /** The registry the login was for; a note about it is only shown for that host. */
+  baseUrl: string;
+  at: string;
 }
 
 type SetupArgs = { cwd?: string; npm?: boolean; pip?: boolean; off?: boolean };
 
 type StoredPlan =
   | { kind: 'claim'; plan: ClaimPlan; opts: ClaimOpts; text: string; asWho: string | null; baseUrl: string; fingerprint: string }
-  | { kind: 'route'; plan: RoutePlan; baseUrl: string }
+  | { kind: 'route'; plan: RoutePlan; asWho: string | null; baseUrl: string }
   | { kind: 'setup'; changes: UseChange[]; origin: string; off: boolean; args: SetupArgs; fingerprint: string };
 
 const text = (lines: string[] | string, data?: unknown): CallToolResult => {
@@ -82,9 +98,9 @@ const text = (lines: string[] | string, data?: unknown): CallToolResult => {
 
 /** The same envelope the CLI's --json prints and the API answers with:
  *  error, code, hint, requestId — as an isError result. */
-export function errorResult(err: unknown): CallToolResult {
+export function errorResult(err: unknown, loginNote?: string): CallToolResult {
   let env: ErrorEnvelope = toErrorEnvelope(err);
-  if (err instanceof RgstrCliError && err.code === 'no_credentials') env = { error: 'Not logged in.', code: 'no_credentials', hint: LOGIN_HINT };
+  if (err instanceof RgstrCliError && err.code === 'no_credentials') env = { error: 'Not logged in.', code: 'no_credentials', hint: loginNote ? `${LOGIN_HINT} — ${loginNote}` : LOGIN_HINT };
   else if (err instanceof RgstrApiError && err.status === 401) env = { ...env, hint: `${LOGIN_HINT}, then try again` };
   // The envelope first, the readable lines last: the hint is the last line, as in the CLI.
   return { content: [{ type: 'text', text: `${JSON.stringify(env)}\n\n${renderError(env)}` }], isError: true };
@@ -122,16 +138,32 @@ export function createServer(options: ServerOptions = {}, version = '0.0.0'): Mc
       throw stale(plan, `The plan was made for ${stored.asWho ?? 'no organization'} at ${stored.baseUrl}; the login now acts for ${c.auth.org ?? 'no organization'} at ${c.baseUrl}.`);
     }
   };
-  /** The READMEs a claim plan would edit, byte for byte, so apply writes only what the user saw. */
+  /** The manifests the plan's names came from and the READMEs it would edit,
+   *  byte for byte: a renamed package or an edited README means a new plan. */
+  const bytes = (file: string | null | undefined) => (file ? fs.readFile(file, 'utf8').catch(() => null) : Promise.resolve(null));
   const claimFingerprint = async (plan: ClaimPlan) =>
-    JSON.stringify(await Promise.all(plan.previews.map(async (p) => [p.t.name, p.readme?.file ?? null, p.readme ? await fs.readFile(p.readme.file, 'utf8').catch(() => null) : null])));
+    JSON.stringify(await Promise.all(plan.previews.map(async (p) => [p.t.name, p.t.manifest ?? null, await bytes(p.t.manifest), p.readme?.file ?? null, await bytes(p.readme?.file)])));
   const dirOf = (cwd?: string, manifest?: string) => path.resolve(cwd ?? (manifest ? path.dirname(manifest) : options.cwd ?? process.cwd()));
   const client = async (optional = false) => new RgstrClient(await resolveAuth({ ...options, optional }));
+  // What became of the last rgstr_login, for no_credentials to mention.
+  let lastLogin: LoginOutcome | null = null;
+  const loginNote = async () => {
+    if (!lastLogin) return undefined;
+    // Resolve the registry first, then read the outcome once: nothing can
+    // change it between the read and the text.
+    const base = await resolveBaseUrl(options).catch(() => null);
+    const o = lastLogin;
+    // A login for another registry (RGSTR_URL changed since) says nothing about this one.
+    if (!o || o.baseUrl !== base) return undefined;
+    if (o.state === 'waiting') return `a login is waiting for approval at ${o.url} (code ${o.code})`;
+    if (o.state === 'approved') return `the last login was approved${o.organization ? ` for ${o.organization}` : ''}; if this server still has no credentials, call rgstr_login again`;
+    return `the last login was ${o.state}: ${o.detail}; call rgstr_login again`;
+  };
   const run = async (fn: () => Promise<CallToolResult>): Promise<CallToolResult> => {
     try {
       return await fn();
     } catch (err) {
-      return errorResult(err);
+      return errorResult(err, await loginNote().catch(() => undefined));
     }
   };
 
@@ -401,7 +433,7 @@ export function createServer(options: ServerOptions = {}, version = '0.0.0'): Mc
         const c = await client();
         const plan = await planRoutes(c, name, { to, rm });
         if (!plan.changed) return text(plan.current.length ? `${name}: ${plan.current.length} route${plan.current.length === 1 ? '' : 's'}` : `${name}: no routes (default: npm:${name})`, { name, packageId: plan.packageId, routes: plan.current });
-        const plan_id = remember({ kind: 'route', plan, baseUrl: c.baseUrl });
+        const plan_id = remember({ kind: 'route', plan, asWho: c.auth.org, baseUrl: c.baseUrl });
         return text([...renderRoutePlan(plan), '', 'Nothing changed — that is the plan. After the user confirms, call rgstr_route_apply with plan_id.'], {
           plan_id,
           name,
@@ -425,7 +457,7 @@ export function createServer(options: ServerOptions = {}, version = '0.0.0'): Mc
       run(async () => {
         const c = await client();
         const stored = take(plan_id, 'route');
-        if (c.baseUrl !== stored.baseUrl) throw stale('rgstr_route_plan', `The plan was made for ${stored.baseUrl}.`);
+        sameTarget(c, stored, 'rgstr_route_plan');
         const { plan } = stored;
         if (!plan.changed) return text(`${plan.name}: nothing to change.`, { name: plan.name, packageId: plan.packageId, routes: plan.current, applied: false });
         // applyRoutes reads the routes again and refuses when they moved since the plan.
@@ -437,43 +469,76 @@ export function createServer(options: ServerOptions = {}, version = '0.0.0'): Mc
   // ── login ───────────────────────────────────────────────────────────────
 
   let login: { url: string; code: string; done: Promise<void> } | null = null;
+  const describeOutcome = (o: LoginOutcome) => {
+    switch (o.state) {
+      case 'waiting':
+        return `Still waiting for approval: ask the user to open ${o.url} and enter the code ${o.code}. Call the tool you wanted once they have.`;
+      case 'approved':
+        return `Approved${o.organization ? `; acting for ${o.organization}` : ''}. The login is stored: call the tool you wanted.`;
+      case 'rejected':
+        return `The user rejected the login (${o.detail}). Call rgstr_login again to start a new one.`;
+      case 'expired':
+        return `The code expired before it was approved (${o.detail}). Call rgstr_login again for a new code.`;
+      default:
+        return `The login failed: ${o.detail}. Call rgstr_login again, or tell the user: ${LOGIN_HINT}.`;
+    }
+  };
   server.registerTool(
     'rgstr_login',
     {
       title: 'Sign in (device code)',
       description:
-        `Starts the device-code login the CLI uses (the same as \`npx @rgstr/cli@latest login\`) and returns the URL and code for the user to approve in a browser. The login completes in the background and is stored for the CLI and this server alike; call the tool you wanted again afterwards. Asks only for registry access.`,
+        `Starts the device-code login the CLI uses (the same as \`npx @rgstr/cli@latest login\`) and returns the URL and code for the user to approve in a browser. The login completes in the background and is stored for the CLI and this server alike. Call again to learn how it went — still waiting, approved (and for which organization), rejected, expired or failed — and the next step; a failed or finished login is reported once, then a new call starts a new login. Asks only for registry access.`,
       inputSchema: {},
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     async () =>
       run(async () => {
-        if (!login) {
-          const baseUrl = await resolveBaseUrl(options);
-          assertHostAllowed(baseUrl, options.allowUntrustedHost);
-          let promptArrived!: (p: { url: string; code: string }) => void;
-          const prompted = new Promise<{ url: string; code: string }>((resolve) => {
-            promptArrived = resolve;
-          });
-          const done = deviceLogin({
-            baseUrl,
-            onPrompt: (code) => promptArrived({ url: code.verification_uri_complete ?? code.verification_uri, code: code.user_code }),
-          })
-            // The same as `rgstr login`: the one organization the user has becomes the active one.
-            .then((creds) => rememberOrganization(baseUrl, creds.token, options))
-            .then(() => undefined)
-            .finally(() => {
-              login = null;
-            });
-          done.catch(() => undefined);
-          // The prompt arrives before the first poll; wait for it (or for the
-          // login to fail before issuing one), not for the user.
-          const prompt = await Promise.race([prompted, done.then(() => null)]);
-          if (!prompt) throw new RgstrCliError('invalid_argument', 'The login ended before a code was issued.', 'Call rgstr_login again');
-          login = { ...prompt, done };
+        if (login) return text(describeOutcome(lastLogin!), { ...lastLogin });
+        if (lastLogin && lastLogin.state !== 'waiting') {
+          // Report the finished login once; the next call starts over.
+          const outcome = lastLogin;
+          lastLogin = null;
+          return text(describeOutcome(outcome), { ...outcome });
         }
-        const { url, code } = login;
-        return text(`Ask the user to open ${url} and enter the code ${code}. Once they approve, the login is stored; call the tool you wanted again.`, { url, code });
+        const baseUrl = await resolveBaseUrl(options);
+        assertHostAllowed(baseUrl, options.allowUntrustedHost);
+        let promptArrived!: (p: { url: string; code: string }) => void;
+        const prompted = new Promise<{ url: string; code: string }>((resolve) => {
+          promptArrived = resolve;
+        });
+        const flow = options.loginFlow ?? deviceLogin;
+        const done = flow({
+          baseUrl,
+          onPrompt: (code) => promptArrived({ url: code.verification_uri_complete ?? code.verification_uri, code: code.user_code }),
+        })
+          // The same as `rgstr login`: the one organization the user has becomes the active one.
+          .then((creds) => rememberOrganization(baseUrl, creds.token, options))
+          .then(({ org }) => {
+            lastLogin = { state: 'approved', organization: org, baseUrl, at: new Date().toISOString() };
+          })
+          .catch((err: unknown) => {
+            const code = err instanceof DeviceFlowError ? err.code : null;
+            const state: LoginOutcome['state'] = code === 'access_denied' ? 'rejected' : code === 'expired_token' ? 'expired' : 'failed';
+            const detail = err instanceof RgstrCliError && err.hint ? `${err.message} — ${err.hint}` : err instanceof Error ? err.message : String(err);
+            lastLogin = { state, detail, baseUrl, at: new Date().toISOString() };
+            throw err;
+          })
+          .finally(() => {
+            login = null;
+          });
+        done.catch(() => undefined);
+        // The prompt arrives before the first poll; wait for it (or for the
+        // login to fail before issuing one), not for the user.
+        const prompt = await Promise.race([prompted, done.then(() => null, () => null)]);
+        if (!prompt) {
+          const failed = lastLogin;
+          lastLogin = null;
+          throw new RgstrCliError('invalid_argument', `The login ended before a code was issued${failed?.detail ? `: ${failed.detail}` : '.'}`, 'Call rgstr_login again');
+        }
+        login = { ...prompt, done };
+        lastLogin = { state: 'waiting', ...prompt, baseUrl, at: new Date().toISOString() };
+        return text(`Ask the user to open ${prompt.url} and enter the code ${prompt.code}. Once they approve, the login is stored; call the tool you wanted again (or rgstr_login to see how it went).`, { ...lastLogin });
       }),
   );
 

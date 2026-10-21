@@ -49,7 +49,7 @@ user to approve; the login is the user's — the agent hands it over and waits.
 | `rgstr_setup_apply` | writes (or removes) exactly those lines | **yes** |
 | `rgstr_route_plan` | a name's routes as they would be | no |
 | `rgstr_route_apply` | one PUT of that list | **yes** |
-| `rgstr_login` | device-code login: returns the URL and code | no |
+| `rgstr_login` | device-code login: returns the URL and code; call again for the outcome (waiting / approved / rejected / expired) | no |
 
 Each `_plan` tool returns the plan as text (what the CLI prints) and as JSON
 with a `plan_id`; the matching `_apply` tool takes only that `plan_id` and

@@ -28,8 +28,9 @@ const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit
   if (method === 'GET' && p.startsWith('/api/v1/registry/whois/')) {
     return json(200, { name: decodeURIComponent(p.split('/').pop()!), url: `${BASE}/registry/x`, trust: 'unclaimed', state: 'unclaimed', holder: null, routes: [], hiddenCopies: null });
   }
+  if (method === 'GET' && p === '/api/v1/me') return json(200, { user: { id: 'u', email: 'a@b.c' }, activeOrganizationId: 'o', organizations: [{ id: 'o', name: 'Acme', slug: 'acme' }] });
   if (method === 'GET' && p === '/api/registry/-/v1/search') {
-    return json(200, { objects: [{ package: { name: 'tsc-rs', version: '0.7.1' }, rgstr: { trust: 'verified', owner: { slug: 'acme' }, tier: 'claimed' } }], total: 1 });
+    return json(200, { objects: [{ package: { name: 'tsc-rs', version: '0.7.1' }, rgstr: { ecosystem: 'npm', trust: 'claimed', owner: 'Acme', tier: 'exact', demotion: null, weeklyDownloads: 12 } }], total: 1 });
   }
   if (method === 'GET' && p === '/api/v1/registry/claims') return json(200, { pending, held: [] });
   if (method === 'POST' && p === '/api/v1/registry/claims') {
@@ -281,5 +282,51 @@ describe('routes and setup: plan then apply', () => {
     expect(JSON.parse(textOf(r).split('\n')[0]).code).toBe('plan_stale');
     expect(writes()).toEqual([]);
     expect(await fs.readFile(path.join(dir, 'README.md'), 'utf8')).not.toContain(TOKEN);
+  });
+
+  it('a route plan made for one organization is not applied as another', async () => {
+    process.env.RGSTR_ORG = 'acme';
+    const client = await connect({ baseUrl: BASE, token: 'x' });
+    const plan = await call(client, 'rgstr_route_plan', { name: 'tsc-rs', to: 'npm:tsc-rs@^0.7' });
+    process.env.RGSTR_ORG = 'other';
+    const r = await call(client, 'rgstr_route_apply', { plan_id: plan.structuredContent?.plan_id });
+    expect(r.isError).toBe(true);
+    expect(JSON.parse(textOf(r).split('\n')[0]).code).toBe('plan_stale');
+    expect(hits.filter((h) => h.method === 'PUT')).toEqual([]);
+  });
+
+  it('rgstr_login reports how the login went, and no_credentials mentions it', async () => {
+    const { DeviceFlowError } = await import('../../../cli/src/auth.js');
+    let reject!: (e: Error) => void;
+    const flow = vi.fn(async (o: { onPrompt: (c: { verification_uri: string; user_code: string }) => void }) => {
+      o.onPrompt({ verification_uri: 'https://rgstr.org/device', user_code: 'ABCD-EFGH' });
+      return new Promise<never>((_, rej) => {
+        reject = rej;
+      });
+    });
+    // No explicit baseUrl: the registry comes from RGSTR_URL, so a change of host is visible.
+    process.env.RGSTR_URL = BASE;
+    const client = await connect({ loginFlow: flow as never });
+    const first = await call(client, 'rgstr_login', {});
+    expect(first.structuredContent).toMatchObject({ state: 'waiting', url: 'https://rgstr.org/device', code: 'ABCD-EFGH' });
+    expect((await call(client, 'rgstr_login', {})).structuredContent?.state).toBe('waiting');
+    const dir = await pkgDir();
+    const waiting = await call(client, 'rgstr_claim_plan', { cwd: dir });
+    expect(waiting.isError).toBe(true);
+    expect(textOf(waiting).split('\n').pop()).toContain('a login is waiting for approval at https://rgstr.org/device (code ABCD-EFGH)');
+    // A login for another registry says nothing about this one.
+    process.env.RGSTR_URL = 'https://other.example';
+    expect(textOf(await call(client, 'rgstr_claim_plan', { cwd: dir })).split('\n').pop()).not.toContain('waiting for approval');
+    process.env.RGSTR_URL = BASE;
+    reject(new DeviceFlowError('access_denied', 'The user denied the request.'));
+    await new Promise((r) => setTimeout(r, 10));
+    const after = await call(client, 'rgstr_claim_plan', { cwd: dir });
+    expect(textOf(after).split('\n').pop()).toContain('the last login was rejected: The user denied the request.; call rgstr_login again');
+    const report = await call(client, 'rgstr_login', {});
+    expect(report.structuredContent?.state).toBe('rejected');
+    expect(textOf(report)).toContain('Call rgstr_login again to start a new one.');
+    // Reported once; the next call starts a new login.
+    expect((await call(client, 'rgstr_login', {})).structuredContent?.state).toBe('waiting');
+    delete process.env.RGSTR_URL;
   });
 });

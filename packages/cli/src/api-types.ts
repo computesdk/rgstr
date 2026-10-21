@@ -15,7 +15,8 @@ export interface SearchObject {
   package: { name: string; version?: string; description?: string };
   rgstr: {
     trust: string;
-    owner?: { name?: string; slug?: string } | null;
+    /** The claiming organization's display name (the API sends a string), or null when unclaimed. */
+    owner?: string | null;
     tier: string;
     demotion?: { kind: 'sibling' | 'namesake' | 'copy'; of: string } | null;
     weeklyDownloads?: number | null;

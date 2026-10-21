@@ -59,6 +59,10 @@ beforeAll(async () => {
           details: { outcome: { kind: 'not_found', checked: ['npm'], failed: [] }, request: pending[0] },
         });
       }
+      if (req.method === 'GET' && url.pathname === '/api/registry/-/v1/search') {
+        // The shape rgstr.org answers with (owner is the organization's display name).
+        return json(200, { objects: [{ package: { name: 'computesdk', version: '1.4.0', description: 'One SDK for every sandbox' }, rgstr: { ecosystem: 'npm', trust: 'claimed', owner: 'ComputeSDK', tier: 'exact', demotion: null, weeklyDownloads: 5765, deprecated: null } }], total: 1 });
+      }
       if (req.method === 'GET' && url.pathname === '/api/v1/registry/whois/nope') {
         return json(404, { error: 'No package named "nope" on npm or PyPI', code: 'name_unknown', message: 'No package named "nope" on npm or PyPI', hint: 'No npm or PyPI package has this name; check the spelling at https://rgstr.org/registry/nope', requestId: 'req_test0003' });
       }
@@ -258,6 +262,8 @@ describe('API errors print code + hint', () => {
     const lines = r.stderr.trim().split('\n');
     expect(lines[0]).toBe('Error: You already have a claim for "taken" under review');
     expect(lines[lines.length - 1]).toBe('Poll POST /api/v1/registry/claims/req-0009/check-proof or run `rgstr claim --check taken`');
+    const s = await rgstr(['search', 'computesdk'], dir);
+    expect(s.stdout).toContain('claimed (ComputeSDK)');
     const w = await rgstr(['whois', 'nope'], dir);
     expect(w.code).toBe(1);
     expect(w.stderr.trim().split('\n').pop()).toBe('No npm or PyPI package has this name; check the spelling at https://rgstr.org/registry/nope');
