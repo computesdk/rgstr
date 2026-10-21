@@ -322,6 +322,11 @@ describe('routes and setup: plan then apply', () => {
     await new Promise((r) => setTimeout(r, 10));
     const after = await call(client, 'rgstr_claim_plan', { cwd: dir });
     expect(textOf(after).split('\n').pop()).toContain('the last login was rejected: The user denied the request.; call rgstr_login again');
+    // Another registry starts fresh: its first call mints a code, not the old registry's result.
+    process.env.RGSTR_URL = 'https://other.example';
+    expect((await call(client, 'rgstr_login', {})).structuredContent).toMatchObject({ state: 'waiting', baseUrl: 'https://other.example' });
+    expect(flow).toHaveBeenCalledTimes(2);
+    process.env.RGSTR_URL = BASE;
     const report = await call(client, 'rgstr_login', {});
     expect(report.structuredContent?.state).toBe('rejected');
     expect(textOf(report)).toContain('Call rgstr_login again to start a new one.');
