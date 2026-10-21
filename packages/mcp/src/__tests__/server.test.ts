@@ -51,7 +51,12 @@ const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit
     if (name === 'needs-identity') {
       return json(403, { error: "Verify your organization's identity before offering", code: 'offer_identity_required', message: 'x', hint: `Verify identity (once per organization, $10) at ${BASE}/manage/acme/identity, then file the offer again`, requestId: 'req_t2' });
     }
-    return json(201, { offer: { id: 'off-0003-ijkl', name, amountUsd, why, status: 'open', windowClosesAt: '2026-11-20T00:00:00Z', createdAt: '2026-10-21T00:00:00Z' }, url: `${BASE}/registry/${name}` });
+    return json(201, {
+      offer: { id: 'off-0003-ijkl', name, amountUsd, why, status: 'unverified', windowClosesAt: null, createdAt: '2026-10-21T00:00:00Z' },
+      url: `${BASE}/registry/${name}`,
+      checkoutUrl: 'https://checkout.stripe.com/c/pay/cs_test_offer',
+      identity: { verified: true },
+    });
   }
   if (method === 'GET' && p.startsWith('/api/registry/')) return json(404, { error: 'not found' });
   if (method === 'GET' && p === '/api/v1/packages') return json(200, { packages: [{ id: 'pkg-1', name: 'tsc-rs', status: 'verified' }] });
@@ -113,6 +118,7 @@ describe('tools/list', () => {
     for (const t of tools.filter((t) => t.name.endsWith('_plan') || ['rgstr_whois', 'rgstr_search', 'rgstr_check', 'rgstr_offers'].includes(t.name))) expect(t.annotations?.readOnlyHint).toBe(true);
     // An offer is a side effect: the instructions and the plan tool say so, and say when not to use it.
     expect(INSTRUCTIONS).toContain('An offer is a side effect');
+    expect(INSTRUCTIONS).not.toContain('hold');
     expect(INSTRUCTIONS).toContain('registered');
     expect(tools.find((t) => t.name === 'rgstr_offer_plan')?.description).toContain('Not for a name the user maintains');
     expect(tools.find((t) => t.name === 'rgstr_claim_check')?.description).toContain('Records the proof on the application and can complete the claim');
@@ -366,7 +372,7 @@ describe('routes and setup: plan then apply', () => {
 });
 
 describe('offer: plan reads the floor and files nothing, apply posts exactly the plan', () => {
-  const RULE = 'The maintainer can claim this name for free at any time during the 30-day window, and that beats your offer; you are refunded in full if they do.';
+  const RULE = 'The maintainer can claim this name for free at any time during the 30-day window, and that beats your offer; your card is charged only if your offer wins, so their claim costs you nothing — there is nothing to refund.';
 
   it('rgstr_offer_plan: one GET, the floor, the amount, the why and the rule, a plan_id, no POST', async () => {
     const client = await connect();
@@ -387,11 +393,15 @@ describe('offer: plan reads the floor and files nothing, apply posts exactly the
     const plan = await call(client, 'rgstr_offer_plan', { name: 'fastcache', amount: 400, why: 'resolve to @acme/fastcache' });
     const r = await call(client, 'rgstr_offer_apply', { plan_id: plan.structuredContent?.plan_id });
     expect(r.isError).toBeFalsy();
-    expect(writes()).toEqual([{ method: 'POST', path: '/api/v1/registry/offers', body: { name: 'fastcache', amountUsd: 400, why: 'resolve to @acme/fastcache' } }]);
+    expect(writes()).toEqual([{ method: 'POST', path: '/api/v1/registry/offers', body: { name: 'fastcache', amountUsd: 400, why: 'resolve to @acme/fastcache', acknowledged: true } }]);
+    // The card is saved at the checkout URL and charged only if the offer wins; the agent hands the URL over.
+    expect(textOf(r)).toContain('Save the card (charged $400 only if your offer wins): https://checkout.stripe.com/c/pay/cs_test_offer');
+    expect(textOf(r)).toContain('The window opens once the card is saved; an offer still waiting after 7 days lapses');
+    expect(textOf(r)).not.toContain('hold');
     // Apply reads the floor once more before it files: the window the user confirmed is the one the offer joins.
     expect(hits.map((h) => `${h.method} ${h.path}`)).toEqual(['GET /api/v1/registry/offers/floor/fastcache', 'GET /api/v1/registry/offers/floor/fastcache', 'POST /api/v1/registry/offers']);
     expect(textOf(r)).toContain(`Filed: offer $400 for fastcache (${BASE}/registry/fastcache)`);
-    expect(r.structuredContent).toMatchObject({ applied: true, filed: true, offer: { id: 'off-0003-ijkl', status: 'open' } });
+    expect(r.structuredContent).toMatchObject({ applied: true, filed: true, offer: { id: 'off-0003-ijkl', status: 'unverified' }, checkoutUrl: 'https://checkout.stripe.com/c/pay/cs_test_offer', identity: { verified: true } });
     const again = await call(client, 'rgstr_offer_apply', { plan_id: plan.structuredContent?.plan_id });
     expect(again.isError).toBe(true);
     expect(textOf(again)).toContain('Call rgstr_offer_plan first');

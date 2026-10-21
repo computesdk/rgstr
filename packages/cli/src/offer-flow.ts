@@ -3,15 +3,16 @@
  * any offer already open on it; prints what would be filed and the rule) and
  * apply (files the offer). For a name the user cannot claim — unclaimed, and
  * not theirs to maintain. A claim always wins: the maintainer can claim the
- * name for free at any time during the window, and every offer is refunded in
- * full when they do. The CLI and @rgstr/mcp both run exactly this.
+ * name for free at any time during the window; the card is charged only if the
+ * offer wins, so nothing is ever refunded because nothing was held. The CLI and
+ * @rgstr/mcp both run exactly this.
  */
 import { RgstrClient, RgstrCliError } from './client.js';
 import { fmtDate, fmtDownloads, fmtUsd, kv, table } from './output.js';
 import type { OpenOffer } from './api-types.js';
 
 /** The rule, in the words the plan prints and skills/rgstr/SKILL.md repeats. */
-export const OFFER_RULE = 'The maintainer can claim this name for free at any time during the 30-day window, and that beats your offer; you are refunded in full if they do.';
+export const OFFER_RULE = 'The maintainer can claim this name for free at any time during the 30-day window, and that beats your offer; your card is charged only if your offer wins, so their claim costs you nothing — there is nothing to refund.';
 
 /** GET /api/v1/registry/offers/floor/<name>: the least an offer on this name can be, and the window as it stands. */
 export interface OfferFloor {
@@ -40,6 +41,10 @@ export interface OfferRecord {
 export interface OfferResponse {
   offer: OfferRecord;
   url: string;
+  /** Stripe Checkout (setup mode) that saves the card; charged off-session only if the offer wins. */
+  checkoutUrl?: string | null;
+  /** Whether the organization's identity is verified; if not, the page to do it and the API's hint. */
+  identity?: { verified: true } | { verified: false; url: string; hint: string } | null;
 }
 
 export interface OfferOpts {
@@ -58,11 +63,11 @@ export interface OfferPlan {
   asWho: string;
 }
 
-/** `400`, `$400`, `400.50` → dollars. Anything else is a usage error. */
+/** `400`, `$400`, `1,000` → whole dollars (the API takes no cents). Anything else is a usage error. */
 export function parseAmount(raw: string): number {
   const n = Number(raw.trim().replace(/^\$/, '').replace(/,/g, ''));
-  if (!Number.isFinite(n) || n <= 0) throw new RgstrCliError('invalid_argument', `--amount must be a dollar amount, not "${raw}"`, 'Pass whole dollars, e.g. --amount 400');
-  return Math.round(n * 100) / 100;
+  if (!Number.isInteger(n) || n <= 0) throw new RgstrCliError('invalid_argument', `--amount must be a whole number of dollars, not "${raw}"`, 'Pass whole dollars, e.g. --amount 400');
+  return n;
 }
 
 export const asWhoFor = (c: RgstrClient) => c.auth.org ?? (c.auth.kind === 'api_key' ? 'the organization your API key belongs to' : 'your organization (pick one with `rgstr org use <slug>`)');
@@ -98,8 +103,8 @@ export function renderOfferPlan(p: OfferPlan): string[] {
   lines.push('');
   lines.push(
     floor.windowClosesAt
-      ? `Files the offer: a card hold of ${fmtUsd(p.amountUsd)} is taken; the highest offer standing when the window closes on ${fmtDate(floor.windowClosesAt)} is charged and registers the name.`
-      : `Files the offer: a card hold of ${fmtUsd(p.amountUsd)} is taken and a 30-day window opens once your organization's identity is verified; if nobody who maintains ${p.name} claims it by then, the hold is charged and the name is registered to you.`,
+      ? `Files the offer: your card is saved and charged ${fmtUsd(p.amountUsd)} only if yours is the highest offer standing when the window closes on ${fmtDate(floor.windowClosesAt)}; the name is then registered to you.`
+      : `Files the offer: your card is saved and charged ${fmtUsd(p.amountUsd)} only if your offer wins. The 30-day window opens once the card is saved and your organization's identity is verified; if nobody who maintains ${p.name} claims it by then, the name is registered to you.`,
   );
   lines.push(OFFER_RULE);
   return lines;
@@ -107,15 +112,20 @@ export function renderOfferPlan(p: OfferPlan): string[] {
 
 /** The apply half — only ever after the user said yes to the plan. */
 export async function applyOffer(c: RgstrClient, p: OfferPlan): Promise<OfferResponse> {
-  return c.post<OfferResponse>('/api/v1/registry/offers', { name: p.name, amountUsd: p.amountUsd, why: p.why });
+  // `acknowledged`: the rule was shown and the user said yes (the web form has a checkbox for it).
+  return c.post<OfferResponse>('/api/v1/registry/offers', { name: p.name, amountUsd: p.amountUsd, why: p.why, acknowledged: true });
 }
 
 /** What `rgstr offer` prints once the offer is filed. */
 export function describeFiled(res: OfferResponse): string[] {
   const o = res.offer;
   const lines = [`Filed: offer ${fmtUsd(o.amountUsd)} for ${o.name} (${res.url})`];
-  if (o.status === 'unverified') lines.push("The window opens once your organization's identity is verified; an unverified offer lapses after 7 days and is never shown to the maintainer.");
-  else if (o.windowClosesAt) lines.push(`Window closes ${fmtDate(o.windowClosesAt)}. The maintainer is told once; if nobody who maintains ${o.name} claims it by then, the highest offer registers the name.`);
+  const identityPending = res.identity != null && res.identity.verified === false;
+  if (res.checkoutUrl) lines.push(`Save the card (charged ${fmtUsd(o.amountUsd)} only if your offer wins): ${res.checkoutUrl}`);
+  if (identityPending && res.identity && res.identity.verified === false) lines.push(res.identity.hint || `Verify your organization's identity: ${res.identity.url}`);
+  if (o.status === 'unverified') {
+    lines.push(`The window opens once the card is saved${identityPending ? ' and the identity is verified' : ''}; an offer still waiting after 7 days lapses and is never shown to the maintainer.`);
+  } else if (o.windowClosesAt) lines.push(`Window closes ${fmtDate(o.windowClosesAt)}. The maintainer is told once; if nobody who maintains ${o.name} claims it by then, the highest offer is charged and registers the name.`);
   lines.push(`Withdraw with \`rgstr offer --withdraw ${o.name}\`; \`rgstr offers\` lists your offers.`);
   return lines;
 }
@@ -130,10 +140,10 @@ export async function listOffers(c: RgstrClient): Promise<OfferRecord[]> {
 }
 
 const STATE_WORDS: Record<OfferStatus, string> = {
-  unverified: 'waiting for identity verification',
+  unverified: 'waiting for the card and identity verification',
   open: 'open',
   won: 'won — name registered',
-  refunded: 'refunded — the maintainer claimed the name',
+  refunded: 'closed — the maintainer claimed the name; nothing was charged',
   lapsed: 'lapsed',
   withdrawn: 'withdrawn',
 };

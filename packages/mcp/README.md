@@ -40,7 +40,7 @@ user to approve; the login is the user's — the agent hands it over and waits.
 | Tool | Does | Changes state |
 | --- | --- | --- |
 | `rgstr_whois` | who claims a name (or registered it through an offer: `state: "registered"`, `registrant`, `routesTo`, `openOffer`), its trust, where installs go | no |
-| `rgstr_search` | names in rgstr's order, claimed first; `state: "registered"` where an offer won | no |
+| `rgstr_search` | names in rgstr's order, claimed first; `registered: true` where an offer won | no |
 | `rgstr_check` | a project's dependencies: who claims each (or `registered (Acme Labs → @acme/fastcache)`), served from where | no |
 | `rgstr_claim_plan` | what `rgstr claim` would file and the README diff | no |
 | `rgstr_claim_apply` | files the claim, writes the badge — exactly the plan | **yes** |
@@ -49,8 +49,8 @@ user to approve; the login is the user's — the agent hands it over and waits.
 | `rgstr_setup_apply` | writes (or removes) exactly those lines | **yes** |
 | `rgstr_route_plan` | a name's routes as they would be | no |
 | `rgstr_route_apply` | one PUT of that list | **yes** |
-| `rgstr_offer_plan` | what `rgstr offer` would file on an unclaimed name the user cannot claim: the floor, the amount, the why, any open offer, and the rule (a maintainer's free claim always beats the offer; full refund) | no |
-| `rgstr_offer_apply` | files exactly that offer; a card hold is taken | **yes** |
+| `rgstr_offer_plan` | what `rgstr offer` would file on an unclaimed name the user cannot claim: the floor, the amount, the why, any open offer, and the rule (a maintainer's free claim always beats the offer; the card is charged only if the offer wins) | no |
+| `rgstr_offer_apply` | files exactly that offer; returns the checkout URL where the user saves the card (charged only if the offer wins) and the identity step | **yes** |
 | `rgstr_offers` | the organization's offers: name, amount, state, when the window closes (needs the login) | no |
 | `rgstr_login` | device-code login: returns the URL and code; call again for the outcome (waiting / approved / rejected / expired) | no |
 
@@ -67,16 +67,20 @@ confirmation before calling apply.** This mirrors
 
 ## Offers
 
-An offer is a side effect — a card hold is taken when it is filed — and it is
+An offer is a side effect — it is filed in the user's name, and the card they
+save at the returned `checkoutUrl` is charged if the offer wins — and it is
 only for an unclaimed name the user does not maintain (a maintainer claims,
-free). `rgstr_offer_plan` reads the floor and shows the plan with the rule in
+free). Nothing is held or charged at filing, so a maintainer's claim refunds
+nothing: there was nothing to refund. `rgstr_offer_plan` reads the floor and shows the plan with the rule in
 plain words; the server's instructions say to show it and confirm before
 `rgstr_offer_apply`. The plan is fingerprinted on name, amount, why, the active
 organization, the registry URL, and what the user was shown about the name —
 the floor, the window and the open offer, read again at apply: if any changed,
 apply answers `plan_stale` and files nothing.
-Filing needs the organization's identity verified; otherwise the API answers
-`offer_identity_required` and the hint is the identity page. Other codes to
+The window opens once the card is saved and the organization's identity is
+verified; apply returns `identity: { verified }` or `{ verified: false, url,
+hint }` — hand the URL to the user. `offer_identity_required` comes back only
+from a host with no identity verification. Other codes to
 expect: `offer_below_floor`, `offer_limit_reached`, `name_claimed`,
 `route_target_not_claimed`.
 

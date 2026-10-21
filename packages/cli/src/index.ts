@@ -497,8 +497,8 @@ program
 
 program
   .command('offer <name>')
-  .description('offer for an unclaimed name you cannot claim (you do not maintain it): shows the floor, the amount, the why and the rule — a maintainer\'s free claim always beats an offer, full refund — asks, then files; --yes skips the question. --withdraw ends your open offer the same way')
-  .option('--amount <usd>', 'the offer in dollars (default: the floor for the name)')
+  .description('offer for an unclaimed name you cannot claim (you do not maintain it): shows the floor, the amount, the why and the rule — a maintainer\'s free claim always beats an offer; your card is charged only if the offer wins — asks, then files; --yes skips the question. --withdraw ends your open offer the same way')
+  .option('--amount <usd>', 'the offer in whole dollars (default: the floor for the name)')
   .option('--why <text>', 'one line shown to the maintainer and the reviewer')
   .option('--withdraw', 'withdraw your organization\'s open offer on the name instead')
   .option('-y, --yes', 'file (or withdraw) without asking (the plan is still shown)')
@@ -526,12 +526,13 @@ program
         }
         const done = await applyWithdraw(c, offer);
         if (g.json) printJson({ ...done, applied: true });
-        else console.log(`Withdrawn: the ${fmtUsd(done.amountUsd)} offer on ${name}. The card hold is released.`);
+        else console.log(`Withdrawn: the ${fmtUsd(done.amountUsd)} offer on ${name}. Nothing was charged.`);
         return;
       }
 
       // Plan → confirm → apply. The plan is one read (the floor); the offer
-      // is filed, and the card hold taken, only after yes.
+      // is filed only after yes (the card is saved at the checkout URL it
+      // returns and charged only if the offer wins).
       const plan = await planOffer(c, name, opts);
       if (!opts.yes) {
         if (g.json) {
@@ -609,7 +610,7 @@ program
           res.objects.map((o) => [
             o.package.name,
             o.package.version ?? '',
-            (o.rgstr.state === 'registered' ? 'registered' : o.rgstr.trust) + (o.rgstr.owner ? ` (${o.rgstr.owner})` : ''),
+            (o.rgstr.registered ? 'registered' : o.rgstr.trust) + (o.rgstr.owner ? ` (${o.rgstr.owner})` : ''),
             fmtDownloads(o.rgstr.weeklyDownloads),
             relation(o.rgstr.demotion),
             (o.package.description ?? '').slice(0, 60),

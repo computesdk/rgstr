@@ -29,8 +29,8 @@ export interface SearchObject {
   package: { name: string; version?: string; description?: string };
   rgstr: {
     trust: string;
-    /** `registered` when an organization registered the name through an offer; `owner` is then the registrant. */
-    state?: string | null;
+    /** True when an organization registered the name through an offer (trust stays `unclaimed`); `owner` is then the registrant. */
+    registered?: boolean;
     /** The claiming (or registering) organization's display name (the API sends a string), or null when unclaimed. */
     owner?: string | null;
     tier: string;
