@@ -18,7 +18,7 @@ import {
   toErrorEnvelope,
   type GlobalOptions,
 } from './client.js';
-import { fmtDownloads, kv, printJson, table } from './output.js';
+import { fmtDate, fmtDownloads, fmtUsd, kv, printJson, table } from './output.js';
 import { formatRouteRow } from './routes.js';
 import { rememberOrganization, type MeResponse } from './login.js';
 import { applyUse, planUse, projectStatus, type UseChange } from './use.js';
@@ -26,6 +26,7 @@ import { confirm, isInteractive } from './prompt.js';
 import { checkProject } from './check-flow.js';
 import { applyClaims, checkOne, outcomeJson, planClaims, previewJson, resolveClaimTargets, silent, type ClaimOpts, type ClaimOutcome, type Say } from './claim-flow.js';
 import { applyRoutes, planRoutes, renderRoutePlan } from './route-flow.js';
+import { applyOffer, applyWithdraw, describeFiled, listOffers, offerPlanJson, offerState, offersTable, planOffer, planWithdraw, renderOfferPlan, type OfferOpts } from './offer-flow.js';
 import type { SearchObject, WhoisResponse } from './api-types.js';
 
 const require = createRequire(import.meta.url);
@@ -34,7 +35,7 @@ const { version } = require('../package.json') as { version: string };
 const program = new Command();
 program
   .name('rgstr')
-  .description('rgstr — claim, prove and route package names · https://rgstr.org')
+  .description('rgstr — claim, prove and route package names; offer for one you cannot claim · https://rgstr.org')
   .version(version)
   .option('--base-url <url>', 'rgstr origin (default https://rgstr.org; RGSTR_URL)')
   .option('--allow-untrusted-host', 'allow a base URL that is not rgstr.org / computesdk.com / localhost')
@@ -317,7 +318,7 @@ program
 
 program
   .command('check [names...]')
-  .description('what resolving this project\'s dependencies through rgstr does: per name, who claims it and where it is served from')
+  .description('what resolving this project\'s dependencies through rgstr does: per name, who claims it (or registered it through an offer) and where it is served from')
   .action(async (names: string[]) => {
     try {
       const g = globals();
@@ -408,7 +409,7 @@ program
 
 program
   .command('whois <name>')
-  .description('who claims a name, how much to trust it, and where it routes')
+  .description('who claims a name (or registered it through an offer), how much to trust it, any open offer, and where it routes')
   .action(async (name: string) => {
     try {
       const c = await client(true);
@@ -417,16 +418,24 @@ program
         printJson(w);
         return;
       }
+      const registered = w.state === 'registered';
       const routes = w.routes.length
         ? w.routes.map((r) => `${r.versionRange} → ${r.upstreamKind}:${r.upstreamName ?? w.name}${r.upstreamKind === 'npm' && r.upstream === 'https://registry.npmjs.org' ? '' : ` (${r.upstream})`}`).join('\n' + ' '.repeat(9))
-        : w.holder
-          ? `* → npm:${w.name} (default)`
-          : 'upstream passthrough (npm, then PyPI)';
+        : registered
+          ? `* → npm:${w.routesTo ?? w.name} (registrant's route)`
+          : w.holder
+            ? `* → npm:${w.name} (default)`
+            : 'upstream passthrough (npm, then PyPI)';
+      // A registered name: an organization won an offer on it; the maintainer can still claim it, free.
+      const state = registered
+        ? [`registered by ${w.registrant?.name ?? 'an organization'}`, w.registrant?.identityVerified === false ? null : 'identity verified', `routes to ${w.routesTo ?? w.name}`, 'no maintainer has claimed this name'].filter(Boolean).join(' · ')
+        : w.trust + (w.state === 'disputed' ? ' (disputed — an application is under review)' : w.state === 'pending' ? ' (application pending)' : '');
       console.log(
         kv([
           ['name', w.name],
-          ['trust', w.trust + (w.state === 'disputed' ? ' (disputed — an application is under review)' : w.state === 'pending' ? ' (application pending)' : '')],
-          ['claimed by', w.holder ? `${w.holder.name} (${w.holder.slug}) ${w.holder.url}${w.holder.via !== w.name ? ` via ${w.holder.via}` : ''}` : 'nobody'],
+          ['trust', state],
+          ['claimed by', w.holder ? `${w.holder.name} (${w.holder.slug}) ${w.holder.url}${w.holder.via !== w.name ? ` via ${w.holder.via}` : ''}` : registered ? `nobody — maintain this package? \`rgstr claim ${w.name}\`, free; a claim beats the registration` : 'nobody'],
+          ['offer', w.openOffer ? `${fmtUsd(w.openOffer.amountUsd)} by ${w.openOffer.by}, window closes ${fmtDate(w.openOffer.windowClosesAt)} — maintain this package? \`rgstr claim ${w.name}\`, free` : null],
           ['routes', routes],
           ['hidden', w.hiddenCopies ? `${w.hiddenCopies} copies hidden under this name` : null],
           ['page', w.url],
@@ -484,6 +493,94 @@ program
     }
   });
 
+// ── offer ─────────────────────────────────────────────────────────────────
+
+program
+  .command('offer <name>')
+  .description('offer for an unclaimed name you cannot claim (you do not maintain it): shows the floor, the amount, the why and the rule — a maintainer\'s free claim always beats an offer; your card is charged only if the offer wins — asks, then files; --yes skips the question. --withdraw ends your open offer the same way')
+  .option('--amount <usd>', 'the offer in whole dollars (default: the floor for the name)')
+  .option('--why <text>', 'one line shown to the maintainer and the reviewer')
+  .option('--withdraw', 'withdraw your organization\'s open offer on the name instead')
+  .option('-y, --yes', 'file (or withdraw) without asking (the plan is still shown)')
+  .action(async (name: string, opts: OfferOpts) => {
+    try {
+      const g = globals();
+      const c = await client();
+      if (opts.withdraw) {
+        const offer = await planWithdraw(c, name);
+        const line = `Withdraw the ${fmtUsd(offer.amountUsd)} offer on ${name} (${offerState(offer)}${offer.windowClosesAt ? `, window closes ${fmtDate(offer.windowClosesAt)}` : ''})`;
+        if (!opts.yes) {
+          if (g.json) {
+            printJson({ ...offer, applied: false, hint: 'pass --yes to withdraw' });
+            return;
+          }
+          console.log(line);
+          if (!isInteractive()) {
+            console.log('\nNothing withdrawn — that is the plan. Re-run with --yes to withdraw it.');
+            return;
+          }
+          if (!(await confirm(`\nWithdraw it?`))) {
+            console.log('Nothing withdrawn.');
+            return;
+          }
+        }
+        const done = await applyWithdraw(c, offer);
+        if (g.json) printJson({ ...done, applied: true });
+        else console.log(`Withdrawn: the ${fmtUsd(done.amountUsd)} offer on ${name}. Nothing was charged.`);
+        return;
+      }
+
+      // Plan → confirm → apply. The plan is one read (the floor); the offer
+      // is filed only after yes (the card is saved at the checkout URL it
+      // returns and charged only if the offer wins).
+      const plan = await planOffer(c, name, opts);
+      if (!opts.yes) {
+        if (g.json) {
+          // --json never asks: it files with --yes and otherwise reports the plan.
+          printJson({ ...offerPlanJson(c, plan), applied: false, hint: `pass --yes to file the offer for ${name}` });
+          return;
+        }
+        for (const l of renderOfferPlan(plan)) console.log(l);
+        if (!isInteractive()) {
+          console.log(`\nNothing filed — that is the plan. Re-run with --yes to file the offer for ${name} as ${plan.asWho}.`);
+          return;
+        }
+        if (!(await confirm(`\nFile the offer?`))) {
+          console.log('Nothing filed.');
+          return;
+        }
+        console.log('');
+      } else if (!g.json) {
+        for (const l of renderOfferPlan(plan)) console.log(l);
+        console.log('');
+      }
+      // A 403 offer_identity_required lands in fail(): the hint (the identity page) is the last line.
+      const res = await applyOffer(c, plan);
+      if (g.json) printJson({ ...offerPlanJson(c, plan), ...res, filed: true, applied: true });
+      else for (const l of describeFiled(res)) console.log(l);
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+program
+  .command('offers')
+  .description('your organization\'s offers: name, amount, state, when the window closes')
+  .action(async () => {
+    try {
+      const c = await client();
+      const offers = await listOffers(c);
+      if (globals().json) {
+        printJson({ org: c.auth.org, offers });
+        return;
+      }
+      if (offers.length === 0) console.log(`No offers from ${c.auth.org ?? 'your organization'}. \`rgstr offer <name>\` makes one on an unclaimed name you cannot claim.`);
+      else console.log(offersTable(offers));
+    } catch (err) {
+      fail(err);
+    }
+  });
+
 // ── search ────────────────────────────────────────────────────────────────
 
 /** Mirrors the website's labels: siblings share the repository, namesakes share the name, copies share the bytes. */
@@ -513,7 +610,7 @@ program
           res.objects.map((o) => [
             o.package.name,
             o.package.version ?? '',
-            o.rgstr.trust + (o.rgstr.owner ? ` (${o.rgstr.owner})` : ''),
+            (o.rgstr.registered ? 'registered' : o.rgstr.trust) + (o.rgstr.owner ? ` (${o.rgstr.owner})` : ''),
             fmtDownloads(o.rgstr.weeklyDownloads),
             relation(o.rgstr.demotion),
             (o.package.description ?? '').slice(0, 60),

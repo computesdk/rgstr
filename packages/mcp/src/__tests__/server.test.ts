@@ -14,6 +14,8 @@ const TOKEN = 'rgstr_abcdefghijklmnopqrst';
 type Hit = { method: string; path: string; body: unknown };
 let hits: Hit[] = [];
 let pending: Array<Record<string, unknown>> = [];
+/** The window on `fastcache` as the floor read reports it; a test moves it between plan and apply. */
+let floorWindow: { floorUsd: number; openOffer: unknown; windowClosesAt: string | null } = { floorUsd: 10, openOffer: null, windowClosesAt: null };
 
 const json = (status: number, value: unknown) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
 const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
@@ -36,6 +38,25 @@ const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit
   if (method === 'POST' && p === '/api/v1/registry/claims') {
     const name = (body as { name: string }).name;
     return json(201, { request: { id: 'req-0001-abcd', name, status: 'pending', verification: 'unverified' }, dispute: null, proof: { token: TOKEN }, url: `${BASE}/registry/${name}` });
+  }
+  if (method === 'GET' && p.startsWith('/api/v1/registry/offers/floor/')) {
+    const name = decodeURIComponent(p.split('/').pop()!);
+    return json(200, { name, weeklyDownloads: 1200, ...floorWindow, url: `${BASE}/registry/${name}` });
+  }
+  if (method === 'GET' && p === '/api/v1/registry/offers') {
+    return json(200, { offers: [{ id: 'off-0001-abcd', name: 'fastcache', amountUsd: 400, why: 'resolve to @acme/fastcache', status: 'open', windowClosesAt: '2026-11-20T00:00:00Z', createdAt: '2026-10-21T00:00:00Z' }] });
+  }
+  if (method === 'POST' && p === '/api/v1/registry/offers') {
+    const { name, amountUsd, why } = body as { name: string; amountUsd: number; why: string | null };
+    if (name === 'needs-identity') {
+      return json(403, { error: "Verify your organization's identity before offering", code: 'offer_identity_required', message: 'x', hint: `Verify identity (once per organization, $10) at ${BASE}/manage/acme/identity, then file the offer again`, requestId: 'req_t2' });
+    }
+    return json(201, {
+      offer: { id: 'off-0003-ijkl', name, amountUsd, why, status: 'unverified', windowClosesAt: null, createdAt: '2026-10-21T00:00:00Z' },
+      url: `${BASE}/registry/${name}`,
+      checkoutUrl: 'https://checkout.stripe.com/c/pay/cs_test_offer',
+      identity: { verified: true },
+    });
   }
   if (method === 'GET' && p.startsWith('/api/registry/')) return json(404, { error: 'not found' });
   if (method === 'GET' && p === '/api/v1/packages') return json(200, { packages: [{ id: 'pkg-1', name: 'tsc-rs', status: 'verified' }] });
@@ -71,6 +92,7 @@ async function pkgDir(readme = '# tsc-rs\n\nHello.\n') {
 beforeEach(async () => {
   hits = [];
   pending = [];
+  floorWindow = { floorUsd: 10, openOffer: null, windowClosesAt: null };
   vi.stubGlobal('fetch', mockFetch);
   delete process.env.RGSTR_TOKEN;
   delete process.env.RGSTR_ORG;
@@ -86,14 +108,19 @@ describe('tools/list', () => {
     const client = await connect();
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual(
-      ['rgstr_check', 'rgstr_claim_apply', 'rgstr_claim_check', 'rgstr_claim_plan', 'rgstr_login', 'rgstr_route_apply', 'rgstr_route_plan', 'rgstr_search', 'rgstr_setup_apply', 'rgstr_setup_plan', 'rgstr_whois'],
+      ['rgstr_check', 'rgstr_claim_apply', 'rgstr_claim_check', 'rgstr_claim_plan', 'rgstr_login', 'rgstr_offer_apply', 'rgstr_offer_plan', 'rgstr_offers', 'rgstr_route_apply', 'rgstr_route_plan', 'rgstr_search', 'rgstr_setup_apply', 'rgstr_setup_plan', 'rgstr_whois'],
     );
     for (const t of tools.filter((t) => t.name.endsWith('_apply'))) {
       expect(t.description).toContain('show the user that plan');
       expect(t.description).toContain('get their confirmation');
       expect(t.annotations?.readOnlyHint).toBe(false);
     }
-    for (const t of tools.filter((t) => t.name.endsWith('_plan') || ['rgstr_whois', 'rgstr_search', 'rgstr_check'].includes(t.name))) expect(t.annotations?.readOnlyHint).toBe(true);
+    for (const t of tools.filter((t) => t.name.endsWith('_plan') || ['rgstr_whois', 'rgstr_search', 'rgstr_check', 'rgstr_offers'].includes(t.name))) expect(t.annotations?.readOnlyHint).toBe(true);
+    // An offer is a side effect: the instructions and the plan tool say so, and say when not to use it.
+    expect(INSTRUCTIONS).toContain('An offer is a side effect');
+    expect(INSTRUCTIONS).not.toContain('hold');
+    expect(INSTRUCTIONS).toContain('registered');
+    expect(tools.find((t) => t.name === 'rgstr_offer_plan')?.description).toContain('Not for a name the user maintains');
     expect(tools.find((t) => t.name === 'rgstr_claim_check')?.description).toContain('Records the proof on the application and can complete the claim');
     expect(client.getInstructions()).toBe(INSTRUCTIONS);
     expect(INSTRUCTIONS).toContain('show the user the plan and get their confirmation first');
@@ -341,5 +368,114 @@ describe('routes and setup: plan then apply', () => {
     expect(blocked.isError).toBe(true);
     expect(textOf(blocked)).toContain('A login for http://127.0.0.1:4199 is still waiting for approval');
     delete process.env.RGSTR_URL;
+  });
+});
+
+describe('offer: plan reads the floor and files nothing, apply posts exactly the plan', () => {
+  const RULE = 'The maintainer can claim this name for free at any time during the 30-day window, and that beats your offer; your card is charged only if your offer wins, so their claim costs you nothing — there is nothing to refund.';
+
+  it('rgstr_offer_plan: one GET, the floor, the amount, the why and the rule, a plan_id, no POST', async () => {
+    const client = await connect();
+    const r = await call(client, 'rgstr_offer_plan', { name: 'fastcache', amount: 400, why: 'resolve to @acme/fastcache' });
+    expect(r.isError).toBeFalsy();
+    const out = textOf(r);
+    expect(out).toContain('Offering $400 for fastcache as acme');
+    expect(out).toContain('floor   $10');
+    expect(out).toContain(RULE);
+    expect(out).toContain('Nothing filed — that is the plan. After the user confirms, call rgstr_offer_apply with plan_id.');
+    expect(r.structuredContent).toMatchObject({ name: 'fastcache', amountUsd: 400, why: 'resolve to @acme/fastcache', applied: false, filed: false, floor: { floorUsd: 10 } });
+    expect(typeof r.structuredContent?.plan_id).toBe('string');
+    expect(hits.map((h) => `${h.method} ${h.path}`)).toEqual(['GET /api/v1/registry/offers/floor/fastcache']);
+  });
+
+  it('rgstr_offer_apply with the plan_id: one POST with name, amount and why; a plan is applied once', async () => {
+    const client = await connect();
+    const plan = await call(client, 'rgstr_offer_plan', { name: 'fastcache', amount: 400, why: 'resolve to @acme/fastcache' });
+    const r = await call(client, 'rgstr_offer_apply', { plan_id: plan.structuredContent?.plan_id });
+    expect(r.isError).toBeFalsy();
+    expect(writes()).toEqual([{ method: 'POST', path: '/api/v1/registry/offers', body: { name: 'fastcache', amountUsd: 400, why: 'resolve to @acme/fastcache', acknowledged: true } }]);
+    // The card is saved at the checkout URL and charged only if the offer wins; the agent hands the URL over.
+    expect(textOf(r)).toContain('Save the card (charged $400 only if your offer wins): https://checkout.stripe.com/c/pay/cs_test_offer');
+    expect(textOf(r)).toContain('The window opens once the card is saved; an offer still waiting after 7 days lapses');
+    expect(textOf(r)).not.toContain('hold');
+    // Apply reads the floor once more before it files: the window the user confirmed is the one the offer joins.
+    expect(hits.map((h) => `${h.method} ${h.path}`)).toEqual(['GET /api/v1/registry/offers/floor/fastcache', 'GET /api/v1/registry/offers/floor/fastcache', 'POST /api/v1/registry/offers']);
+    expect(textOf(r)).toContain(`Filed: offer $400 for fastcache (${BASE}/registry/fastcache)`);
+    expect(r.structuredContent).toMatchObject({ applied: true, filed: true, offer: { id: 'off-0003-ijkl', status: 'unverified' }, checkoutUrl: 'https://checkout.stripe.com/c/pay/cs_test_offer', identity: { verified: true } });
+    const again = await call(client, 'rgstr_offer_apply', { plan_id: plan.structuredContent?.plan_id });
+    expect(again.isError).toBe(true);
+    expect(textOf(again)).toContain('Call rgstr_offer_plan first');
+  });
+
+  it('the amount defaults to the floor; below the floor is refused before any POST', async () => {
+    const client = await connect();
+    const plan = await call(client, 'rgstr_offer_plan', { name: 'fastcache' });
+    expect(plan.structuredContent).toMatchObject({ amountUsd: 10 });
+    const low = await call(client, 'rgstr_offer_plan', { name: 'fastcache', amount: 5 });
+    expect(low.isError).toBe(true);
+    expect(textOf(low).split('\n').pop()).toBe('Re-run with --amount 10 or more');
+    expect(writes()).toEqual([]);
+  });
+
+  it('an offer plan made for one organization is not applied as another (plan_stale)', async () => {
+    process.env.RGSTR_ORG = 'acme';
+    const client = await connect({ baseUrl: BASE, token: 'x' });
+    const plan = await call(client, 'rgstr_offer_plan', { name: 'fastcache', amount: 400 });
+    process.env.RGSTR_ORG = 'other';
+    const r = await call(client, 'rgstr_offer_apply', { plan_id: plan.structuredContent?.plan_id });
+    expect(r.isError).toBe(true);
+    expect(JSON.parse(textOf(r).split('\n')[0]).code).toBe('plan_stale');
+    expect(textOf(r).split('\n').pop()).toBe('Run rgstr_offer_plan again and show the user the new plan');
+    expect(writes()).toEqual([]);
+    delete process.env.RGSTR_ORG;
+  });
+
+  it('another offer opened the window after the plan: apply answers plan_stale and files nothing', async () => {
+    const client = await connect();
+    const plan = await call(client, 'rgstr_offer_plan', { name: 'fastcache', amount: 400 });
+    expect(textOf(plan)).not.toContain('open offer');
+    floorWindow = { floorUsd: 10, openOffer: { amountUsd: 250, by: 'Other Co', windowClosesAt: '2026-11-20T00:00:00Z' }, windowClosesAt: '2026-11-20T00:00:00Z' };
+    const r = await call(client, 'rgstr_offer_apply', { plan_id: plan.structuredContent?.plan_id });
+    expect(r.isError).toBe(true);
+    expect(JSON.parse(textOf(r).split('\n')[0]).code).toBe('plan_stale');
+    expect(textOf(r)).toContain('The floor, the window or the open offer on this name changed since the plan was made.');
+    expect(writes()).toEqual([]);
+    // The new plan shows the window the offer would join.
+    const again = await call(client, 'rgstr_offer_plan', { name: 'fastcache', amount: 400 });
+    expect(textOf(again)).toContain('open offer  $250 by Other Co, window closes Nov 20, 2026');
+    expect(textOf(again)).toContain('window closes on Nov 20, 2026');
+  });
+
+  it('the floor rose past the amount after the plan: apply answers plan_stale, not invalid_argument', async () => {
+    const client = await connect();
+    const plan = await call(client, 'rgstr_offer_plan', { name: 'fastcache', amount: 400 });
+    floorWindow = { floorUsd: 500, openOffer: null, windowClosesAt: null };
+    const r = await call(client, 'rgstr_offer_apply', { plan_id: plan.structuredContent?.plan_id });
+    expect(r.isError).toBe(true);
+    expect(JSON.parse(textOf(r).split('\n')[0]).code).toBe('plan_stale');
+    expect(textOf(r).split('\n').pop()).toBe('Run rgstr_offer_plan again and show the user the new plan');
+    expect(writes()).toEqual([]);
+  });
+
+  it('offer_identity_required on apply: the identity URL is the last line', async () => {
+    const client = await connect();
+    const plan = await call(client, 'rgstr_offer_plan', { name: 'needs-identity', amount: 40 });
+    const r = await call(client, 'rgstr_offer_apply', { plan_id: plan.structuredContent?.plan_id });
+    expect(r.isError).toBe(true);
+    expect(JSON.parse(textOf(r).split('\n')[0])).toMatchObject({ code: 'offer_identity_required', status: 403, requestId: 'req_t2' });
+    expect(textOf(r).split('\n').pop()).toBe(`Verify identity (once per organization, $10) at ${BASE}/manage/acme/identity, then file the offer again`);
+  });
+
+  it('rgstr_offers lists the organization\'s offers and writes nothing; without a login it says how to get one', async () => {
+    const client = await connect();
+    const r = await call(client, 'rgstr_offers', {});
+    expect(r.isError).toBeFalsy();
+    expect(textOf(r)).toContain('fastcache: 400 USD, open, window closes 2026-11-20T00:00:00Z');
+    expect(r.structuredContent).toMatchObject({ org: 'acme', offers: [{ id: 'off-0001-abcd' }] });
+    expect(writes()).toEqual([]);
+    const anon = await connect({ baseUrl: BASE });
+    const denied = await call(anon, 'rgstr_offers', {});
+    expect(denied.isError).toBe(true);
+    expect(textOf(denied).split('\n').pop()).toBe(LOGIN_HINT);
   });
 });

@@ -60,8 +60,56 @@ beforeAll(async () => {
         });
       }
       if (req.method === 'GET' && url.pathname === '/api/registry/-/v1/search') {
-        // The shape rgstr.org answers with (owner is the organization's display name).
-        return json(200, { objects: [{ package: { name: 'computesdk', version: '1.4.0', description: 'One SDK for every sandbox' }, rgstr: { ecosystem: 'npm', trust: 'claimed', owner: 'ComputeSDK', tier: 'exact', demotion: null, weeklyDownloads: 5765, deprecated: null } }], total: 1 });
+        // The shape rgstr.org answers with (owner is the organization's display name; state registered = won an offer).
+        return json(200, {
+          objects: [
+            { package: { name: 'computesdk', version: '1.4.0', description: 'One SDK for every sandbox' }, rgstr: { ecosystem: 'npm', trust: 'claimed', owner: 'ComputeSDK', tier: 'exact', demotion: null, weeklyDownloads: 5765, deprecated: null } },
+            { package: { name: 'fastcache', version: '0.0.1', description: 'reserved' }, rgstr: { ecosystem: 'npm', trust: 'unclaimed', registered: true, owner: 'Acme Labs', tier: 'exact', demotion: null, weeklyDownloads: 1200, deprecated: null } },
+          ],
+          total: 2,
+        });
+      }
+      // Offers: the floor is the one read a plan needs; filing is the POST.
+      if (req.method === 'GET' && url.pathname.startsWith('/api/v1/registry/offers/floor/')) {
+        const name = decodeURIComponent(url.pathname.split('/').pop()!);
+        if (name === 'computesdk') return json(409, { error: 'computesdk is claimed', code: 'name_claimed', message: 'computesdk is claimed', hint: 'This name is claimed; offers on claimed names are not open yet. See https://rgstr.org/registry/computesdk', requestId: 'req_test0010' });
+        return json(200, { name, floorUsd: 10, weeklyDownloads: 1200, openOffer: name === 'contested' ? { amountUsd: 250, by: 'Other Co', windowClosesAt: '2026-11-20T00:00:00Z' } : null, windowClosesAt: name === 'contested' ? '2026-11-20T00:00:00Z' : null, url: `${base}/registry/${name}` });
+      }
+      if (req.method === 'GET' && url.pathname === '/api/v1/registry/offers') {
+        return json(200, {
+          offers: [
+            { id: 'off-0001-abcd', name: 'fastcache', amountUsd: 400, why: 'resolve to @acme/fastcache', status: 'open', windowClosesAt: '2026-11-20T00:00:00Z', createdAt: '2026-10-21T00:00:00Z', url: `${base}/registry/fastcache` },
+            { id: 'off-0002-efgh', name: 'oldname', amountUsd: 10, why: null, status: 'refunded', windowClosesAt: '2026-09-01T00:00:00Z', createdAt: '2026-08-01T00:00:00Z' },
+            // Identity already verified: only the card is outstanding.
+            { id: 'off-0004-mnop', name: 'cardless', amountUsd: 25, why: null, status: 'unverified', windowClosesAt: null, createdAt: '2026-10-21T00:00:00Z', organization: { name: 'Acme', slug: 'acme', identityVerified: true } },
+            { id: 'off-0005-qrst', name: 'bothpending', amountUsd: 25, why: null, status: 'unverified', windowClosesAt: null, createdAt: '2026-10-21T00:00:00Z', organization: { name: 'Acme', slug: 'acme', identityVerified: false } },
+          ],
+        });
+      }
+      if (req.method === 'POST' && url.pathname === '/api/v1/registry/offers') {
+        const { name, amountUsd, why } = body as { name: string; amountUsd: number; why: string | null };
+        if (name === 'needs-identity') {
+          return json(403, { error: 'Verify your organization\'s identity before offering', code: 'offer_identity_required', message: 'Verify your organization\'s identity before offering', hint: `Verify identity (once per organization, $10) at ${base}/manage/acme/identity, then file the offer again`, requestId: 'req_test0011' });
+        }
+        if (amountUsd < 10) return json(400, { error: 'Below the floor', code: 'offer_below_floor', message: 'Below the floor', hint: 'The floor for this name is $10', requestId: 'req_test0012' });
+        // As the platform answers: the offer waits for the card (Checkout, setup mode) and identity; nothing is charged until it wins.
+        return json(201, {
+          offer: { id: 'off-0003-ijkl', name, amountUsd, floorUsd: 10, why, status: 'unverified', windowOpensAt: null, windowClosesAt: null, routeTargetName: null, registeredAt: null, createdAt: '2026-10-21T00:00:00Z', url: `${base}/registry/${name}`, organization: { name: 'Acme', slug: 'acme', identityVerified: false } },
+          url: `${base}/registry/${name}`,
+          checkoutUrl: 'https://checkout.stripe.com/c/pay/cs_test_offer',
+          identity: { verified: false, url: `${base}/manage/acme/identity`, hint: `Verify identity first: ${base}/manage/acme/identity — the offer lapses after 7 days without it` },
+          acknowledgement: 'x',
+        });
+      }
+      if (req.method === 'POST' && url.pathname === '/api/v1/registry/offers/off-0001-abcd/withdraw') {
+        return json(200, { offer: { id: 'off-0001-abcd', name: 'fastcache', amountUsd: 400, why: 'resolve to @acme/fastcache', status: 'withdrawn', windowClosesAt: '2026-11-20T00:00:00Z', createdAt: '2026-10-21T00:00:00Z' } });
+      }
+      if (req.method === 'GET' && url.pathname === '/api/v1/registry/whois/fastcache') {
+        // A registered name: Acme Labs won an offer; no maintainer has claimed it.
+        return json(200, { name: 'fastcache', url: `${base}/registry/fastcache`, trust: 'unclaimed', state: 'registered', holder: null, routes: [], hiddenCopies: null, registrant: { name: 'Acme Labs', slug: 'acme', url: `${base}/~acme`, identityVerified: true }, routesTo: '@acme/fastcache', openOffer: null });
+      }
+      if (req.method === 'GET' && url.pathname === '/api/v1/registry/whois/contested') {
+        return json(200, { name: 'contested', url: `${base}/registry/contested`, trust: 'unclaimed', state: 'unclaimed', holder: null, routes: [], hiddenCopies: null, registrant: null, routesTo: null, openOffer: { amountUsd: 400, by: 'Acme Labs', windowClosesAt: '2026-11-20T00:00:00Z' } });
       }
       if (req.method === 'GET' && url.pathname === '/api/v1/registry/whois/nope') {
         return json(404, { error: 'No package named "nope" on npm or PyPI', code: 'name_unknown', message: 'No package named "nope" on npm or PyPI', hint: 'No npm or PyPI package has this name; check the spelling at https://rgstr.org/registry/nope', requestId: 'req_test0003' });
@@ -114,6 +162,7 @@ async function rgstr(args: string[], cwd: string) {
 }
 
 const claimPosts = () => hits.filter((h) => h.method === 'POST' && h.path === '/api/v1/registry/claims');
+const offerPosts = () => hits.filter((h) => h.method === 'POST' && h.path.startsWith('/api/v1/registry/offers'));
 const writes = () => hits.filter((h) => h.method !== 'GET');
 
 describe('rgstr claim files nothing until --yes', () => {
@@ -264,6 +313,7 @@ describe('API errors print code + hint', () => {
     expect(lines[lines.length - 1]).toBe('Poll POST /api/v1/registry/claims/req-0009/check-proof or run `rgstr claim --check taken`');
     const s = await rgstr(['search', 'computesdk'], dir);
     expect(s.stdout).toContain('claimed (ComputeSDK)');
+    expect(s.stdout).toContain('registered (Acme Labs)');
     const w = await rgstr(['whois', 'nope'], dir);
     expect(w.code).toBe(1);
     expect(w.stderr.trim().split('\n').pop()).toBe('No npm or PyPI package has this name; check the spelling at https://rgstr.org/registry/nope');
@@ -308,5 +358,156 @@ describe('rgstr route changes nothing until --yes', () => {
     expect(puts[0]).toMatchObject({ method: 'PUT', path: '/api/v1/packages/pkg-1/routes' });
     expect((puts[0].body as { routes: unknown[] }).routes).toHaveLength(2);
     expect(r.stdout).toContain('npm:tsc-rs-real');
+  });
+});
+
+describe('rgstr offer files nothing until --yes', () => {
+  const RULE = 'The maintainer can claim this name for free at any time during the 30-day window, and that beats your offer; your card is charged only if your offer wins, so their claim costs you nothing — there is nothing to refund.';
+
+  it('without --yes: shows the floor, the amount, the why and the rule; one read, no POST', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'rgstr-empty-'));
+    const r = await rgstr(['offer', 'fastcache', '--amount', '400', '--why', 'resolve to @acme/fastcache'], dir);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain('Offering $400 for fastcache as acme');
+    expect(r.stdout).toContain('floor   $10 (1.2k/wk on the busiest index)');
+    expect(r.stdout).toContain('amount  $400');
+    expect(r.stdout).toContain('why     resolve to @acme/fastcache');
+    expect(r.stdout).toContain('returns a checkout link where you save the card — charged $400 only if your offer wins');
+    expect(r.stdout).not.toContain('hold');
+    expect(r.stdout).toContain(RULE);
+    expect(r.stdout).toContain('Re-run with --yes to file the offer for fastcache as acme.');
+    expect(r.stdout).not.toContain('Filed:');
+    expect(hits.map((h) => `${h.method} ${h.path}`)).toEqual(['GET /api/v1/registry/offers/floor/fastcache']);
+    expect(offerPosts()).toHaveLength(0);
+  });
+
+  it('with --yes: one POST with name, amount, why and the acknowledgement; the filed line, the checkout URL, the identity step', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'rgstr-empty-'));
+    const r = await rgstr(['offer', 'fastcache', '--amount', '400', '--why', 'resolve to @acme/fastcache', '--yes'], dir);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain(RULE);
+    expect(r.stdout).toContain(`Filed: offer $400 for fastcache (${base}/registry/fastcache)`);
+    expect(r.stdout).toContain('Save the card (charged $400 only if your offer wins): https://checkout.stripe.com/c/pay/cs_test_offer');
+    expect(r.stdout).toContain(`Verify identity first: ${base}/manage/acme/identity — the offer lapses after 7 days without it`);
+    expect(r.stdout).toContain('The window opens once the card is saved and the identity is verified; an offer still waiting after 7 days lapses');
+    expect(offerPosts()).toEqual([{ method: 'POST', path: '/api/v1/registry/offers', body: { name: 'fastcache', amountUsd: 400, why: 'resolve to @acme/fastcache', acknowledged: true } }]);
+  });
+
+  it('--amount takes whole dollars only', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'rgstr-empty-'));
+    const r = await rgstr(['offer', 'fastcache', '--amount', '12.50'], dir);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('--amount must be a whole number of dollars');
+    expect(offerPosts()).toHaveLength(0);
+    expect(JSON.parse((await rgstr(['--json', 'offer', 'fastcache', '--amount', '$1,000'], dir)).stdout).amountUsd).toBe(1000);
+  });
+
+  it('--amount defaults to the floor; an open offer on the name is shown', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'rgstr-empty-'));
+    const r = await rgstr(['offer', 'contested'], dir);
+    expect(r.stdout).toContain('amount      $10 (the floor; --amount to offer more)');
+    expect(r.stdout).toContain('open offer  $250 by Other Co, window closes Nov 20, 2026');
+    expect(r.stdout).toContain('window closes on Nov 20, 2026');
+    expect(offerPosts()).toHaveLength(0);
+  });
+
+  it('--json without --yes reports the plan and files nothing; --json --yes files', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'rgstr-empty-'));
+    const plan = JSON.parse((await rgstr(['--json', 'offer', 'fastcache', '--amount', '400'], dir)).stdout);
+    expect(plan).toMatchObject({ name: 'fastcache', org: 'acme', amountUsd: 400, why: null, filed: false, applied: false, floor: { floorUsd: 10 }, rule: RULE });
+    expect(plan.hint).toContain('pass --yes');
+    expect(offerPosts()).toHaveLength(0);
+    const filed = JSON.parse((await rgstr(['--json', 'offer', 'fastcache', '--amount', '400', '--yes'], dir)).stdout);
+    expect(filed).toMatchObject({ name: 'fastcache', filed: true, applied: true, offer: { id: 'off-0003-ijkl', status: 'unverified' }, checkoutUrl: 'https://checkout.stripe.com/c/pay/cs_test_offer', identity: { verified: false } });
+    expect(offerPosts()).toHaveLength(1);
+  });
+
+  it('below the floor: refused before any POST, the floor in the hint', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'rgstr-empty-'));
+    const r = await rgstr(['offer', 'fastcache', '--amount', '5', '--yes'], dir);
+    expect(r.code).toBe(1);
+    const lines = r.stderr.trim().split('\n');
+    expect(lines[0]).toBe('Error: $5 is below the floor for fastcache ($10).');
+    expect(lines[lines.length - 1]).toBe('Re-run with --amount 10 or more');
+    expect(offerPosts()).toHaveLength(0);
+  });
+
+  it('a claimed name: the API\'s name_claimed hint is the last line, nothing filed', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'rgstr-empty-'));
+    const r = await rgstr(['offer', 'computesdk', '--yes'], dir);
+    expect(r.code).toBe(1);
+    expect(r.stderr.trim().split('\n').pop()).toBe('This name is claimed; offers on claimed names are not open yet. See https://rgstr.org/registry/computesdk');
+    expect(offerPosts()).toHaveLength(0);
+  });
+
+  it('offer_identity_required after filing: the identity URL is the last line', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'rgstr-empty-'));
+    const r = await rgstr(['offer', 'needs-identity', '--amount', '40', '--yes'], dir);
+    expect(r.code).toBe(1);
+    const lines = r.stderr.trim().split('\n');
+    expect(lines[0]).toBe("Error: Verify your organization's identity before offering");
+    expect(lines[lines.length - 1]).toBe(`Verify identity (once per organization, $10) at ${base}/manage/acme/identity, then file the offer again`);
+    const j = await rgstr(['--json', 'offer', 'needs-identity', '--amount', '40', '--yes'], dir);
+    expect(JSON.parse(j.stdout)).toMatchObject({ code: 'offer_identity_required', status: 403, requestId: 'req_test0011' });
+  });
+
+  it('offers lists mine: name, amount, state, window closes', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'rgstr-empty-'));
+    const r = await rgstr(['offers'], dir);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toMatch(/^name\s+amount\s+state\s+window closes$/m);
+    expect(r.stdout).toMatch(/^fastcache\s+\$400\s+open\s+Nov 20, 2026$/m);
+    expect(r.stdout).toMatch(/^oldname\s+\$10\s+closed — the maintainer claimed the name; nothing was charged\s+—$/m);
+    expect(r.stdout).toMatch(/^cardless\s+\$25\s+waiting for the card\s+—$/m);
+    expect(r.stdout).toMatch(/^bothpending\s+\$25\s+waiting for the card and identity verification\s+—$/m);
+    expect(writes()).toHaveLength(0);
+    expect(JSON.parse((await rgstr(['--json', 'offers'], dir)).stdout).offers).toHaveLength(4);
+  });
+
+  it('--withdraw: shows the offer, POSTs the withdrawal only with --yes', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'rgstr-empty-'));
+    const plan = await rgstr(['offer', '--withdraw', 'fastcache'], dir);
+    expect(plan.code).toBe(0);
+    expect(plan.stdout).toContain('Withdraw the $400 offer on fastcache (open, window closes Nov 20, 2026)');
+    expect(plan.stdout).toContain('Re-run with --yes to withdraw it.');
+    expect(writes()).toHaveLength(0);
+    const r = await rgstr(['offer', '--withdraw', 'fastcache', '--yes'], dir);
+    expect(r.stdout).toContain('Withdrawn: the $400 offer on fastcache. Nothing was charged.');
+    expect(writes()).toEqual([{ method: 'POST', path: '/api/v1/registry/offers/off-0001-abcd/withdraw', body: {} }]);
+    const none = await rgstr(['offer', '--withdraw', 'oldname', '--yes'], dir);
+    expect(none.code).toBe(1);
+    expect(none.stderr).toContain('acme has no open offer on oldname.');
+  });
+});
+
+describe('registered is a state the CLI prints', () => {
+  it('whois: registered by, identity verified, routes to, no maintainer has claimed it; the free claim', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'rgstr-empty-'));
+    const r = await rgstr(['whois', 'fastcache'], dir);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain('trust       registered by Acme Labs · identity verified · routes to @acme/fastcache · no maintainer has claimed this name');
+    expect(r.stdout).toContain('claimed by  nobody — maintain this package? `rgstr claim fastcache`, free; a claim beats the registration');
+    expect(r.stdout).toContain("routes      * → npm:@acme/fastcache (registrant's route)");
+    expect(JSON.parse((await rgstr(['--json', 'whois', 'fastcache'], dir)).stdout)).toMatchObject({ state: 'registered', registrant: { name: 'Acme Labs' }, routesTo: '@acme/fastcache' });
+  });
+
+  it('whois: an open offer on an unclaimed name, and the free claim that beats it', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'rgstr-empty-'));
+    const r = await rgstr(['whois', 'contested'], dir);
+    expect(r.stdout).toContain('trust       unclaimed');
+    expect(r.stdout).toContain('offer       $400 by Acme Labs, window closes Nov 20, 2026 — maintain this package? `rgstr claim contested`, free');
+  });
+
+  it('check: one line per dependency, registered (registrant → route), and the summary counts it apart from claimed', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'rgstr-check-'));
+    await fs.writeFile(path.join(dir, 'package.json'), JSON.stringify({ name: 'app', dependencies: { fastcache: '^1', react: '^19' } }));
+    await fs.writeFile(path.join(dir, '.npmrc'), `registry=${base}/api/registry\n`);
+    const r = await rgstr(['check'], dir);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("fastcache  registered (Acme Labs → @acme/fastcache)  —           npm:@acme/fastcache (registrant's route)");
+    expect(r.stdout).toContain('0 of 2 names are claimed on rgstr and 1 registered; the rest fall through to npm unchanged.');
+    const j = JSON.parse((await rgstr(['--json', 'check'], dir)).stdout);
+    expect(j).toMatchObject({ held: 0, registered: 1, total: 2 });
+    expect(j.names[0]).toMatchObject({ name: 'fastcache', registered: true, registrant: 'Acme Labs', routesTo: '@acme/fastcache', held: false });
   });
 });

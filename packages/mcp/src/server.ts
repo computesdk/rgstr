@@ -39,19 +39,21 @@ import {
   type GlobalOptions,
 } from '../../cli/src/client.js';
 import { applyRoutes, planRoutes, renderRoutePlan, type RoutePlan } from '../../cli/src/route-flow.js';
+import { OFFER_RULE, applyOffer, describeFiled, fetchFloor, listOffers, offerPlanJson, offerState, planOffer, renderOfferPlan, type OfferPlan } from '../../cli/src/offer-flow.js';
 import { applyUse, planUse, type UseChange } from '../../cli/src/use.js';
 
 export const LOGIN_HINT = 'Run `npx @rgstr/cli@latest login`';
 
 /** The rule, as skills/rgstr/SKILL.md and https://rgstr.org/llms.txt say it. */
 export const CONFIRM_FIRST =
-  'Before anything that changes state — filing a claim, editing a README or opening a pull request, changing routes, or editing .npmrc / pip.conf — show the user the plan and get their confirmation first. Reading (whois, search, check) needs none.';
+  'Before anything that changes state — filing a claim or an offer, editing a README or opening a pull request, changing routes, or editing .npmrc / pip.conf — show the user the plan and get their confirmation first. Reading (whois, search, check, offers) needs none.';
 
 export const INSTRUCTIONS = [
   'rgstr (https://rgstr.org) is the package name registry over npm and PyPI: who claims a name, how much to trust it, and where installs of it are served from.',
-  'Reading needs no account: rgstr_whois, rgstr_search, rgstr_check.',
-  'Changing state is two tools. The *_plan tools are free: they read, show exactly what would be filed or written (the claim, the README diff, the routes as they would be, the .npmrc / pip.conf lines) and change nothing. The *_apply tools file and write exactly what the plan said.',
+  'Reading needs no account: rgstr_whois, rgstr_search, rgstr_check. A name is unclaimed, claimed (a maintainer proved it) or registered (an identity-verified organization won an offer on it; no maintainer has claimed it, and a claim still beats it).',
+  'Changing state is two tools. The *_plan tools are free: they read, show exactly what would be filed or written (the claim, the README diff, the offer, the routes as they would be, the .npmrc / pip.conf lines) and change nothing. The *_apply tools file and write exactly what the plan said.',
   CONFIRM_FIRST,
+  `An offer is a side effect — it is filed in the user's name and their card, once saved at the checkout URL apply returns, is charged if the offer wins. Only for an unclaimed name the user does not maintain (a maintainer claims, free). rgstr_offer_plan shows the floor, the amount, the why and the rule (${OFFER_RULE}); show it and confirm before rgstr_offer_apply. The checkout and identity URLs apply returns are the user's: hand them over.`,
   'Never call a *_apply tool on a plan the user has not seen and confirmed. rgstr_claim_check records the proof and can complete the claim.',
   `Writes need a login. When a tool answers "no_credentials", tell the user: ${LOGIN_HINT} (or call rgstr_login and give them the URL and code).`,
   'Every error carries code + hint: follow the hint.',
@@ -86,6 +88,7 @@ type SetupArgs = { cwd?: string; npm?: boolean; pip?: boolean; off?: boolean };
 type StoredPlan =
   | { kind: 'claim'; plan: ClaimPlan; opts: ClaimOpts; text: string; asWho: string | null; baseUrl: string; fingerprint: string }
   | { kind: 'route'; plan: RoutePlan; asWho: string | null; baseUrl: string }
+  | { kind: 'offer'; plan: OfferPlan; asWho: string | null; baseUrl: string; fingerprint: string }
   | { kind: 'setup'; changes: UseChange[]; origin: string; off: boolean; args: SetupArgs; fingerprint: string };
 
 const text = (lines: string[] | string, data?: unknown): CallToolResult => {
@@ -172,7 +175,7 @@ export function createServer(options: ServerOptions = {}, version = '0.0.0'): Mc
     'rgstr_whois',
     {
       title: 'Who claims a name',
-      description: 'Who claims a package name on rgstr, how much to trust it (unclaimed, claimed, verified), and where installs of it are served from. Reads only; no account needed.',
+      description: 'Who claims a package name on rgstr, how much to trust it (unclaimed, claimed, verified), or who registered it through an offer (state `registered`, with registrant and routesTo), any open offer (openOffer), and where installs of it are served from. Reads only; no account needed.',
       inputSchema: { name: z.string().describe('Package name (`left-pad`, `@scope/pkg`) or scope (`@scope`).') },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
@@ -187,7 +190,7 @@ export function createServer(options: ServerOptions = {}, version = '0.0.0'): Mc
     'rgstr_search',
     {
       title: 'Search names',
-      description: "Search package names in rgstr's order — claimed names first — with trust, weekly downloads and whether a result is a sibling, namesake or copy of a bigger package. Reads only; no account needed.",
+      description: "Search package names in rgstr's order — claimed names first — with trust (and `registered: true` for a name an organization registered through an offer), weekly downloads and whether a result is a sibling, namesake or copy of a bigger package. Reads only; no account needed.",
       inputSchema: { text: z.string().describe('Search text.'), size: z.number().int().min(1).max(50).optional().describe('Rows (default 10).') },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
@@ -202,7 +205,7 @@ export function createServer(options: ServerOptions = {}, version = '0.0.0'): Mc
     'rgstr_check',
     {
       title: "Check a project's dependencies",
-      description: "What resolving this project's dependencies through rgstr does: per name, who claims it and where it is served from. Reads the project's manifests and .npmrc / pip config; the project must already be pointed at rgstr (rgstr_setup_plan / rgstr_setup_apply). Reads only.",
+      description: "What resolving this project's dependencies through rgstr does: per name, who claims it (or registered it through an offer: `registered (Acme Labs → @acme/fastcache)`) and where it is served from. Reads the project's manifests and .npmrc / pip config; the project must already be pointed at rgstr (rgstr_setup_plan / rgstr_setup_apply). Reads only.",
       inputSchema: {
         cwd: cwdSchema,
         manifest: z.string().optional().describe('A package.json / pyproject.toml / requirements.txt path; its directory is the project.'),
@@ -462,6 +465,74 @@ export function createServer(options: ServerOptions = {}, version = '0.0.0'): Mc
         // applyRoutes reads the routes again and refuses when they moved since the plan.
         const routes = await applyRoutes(c, plan);
         return text(`${plan.name}: routes applied (${routes.length}).`, { name: plan.name, packageId: plan.packageId, routes, applied: true });
+      }),
+  );
+
+  // ── offer ───────────────────────────────────────────────────────────────
+
+  /** What the plan was made of — the inputs, the organization and the registry, and
+   *  what the user was shown about the name: the floor, the window and the open
+   *  offer. Another offer opening the window after the plan means a new plan. */
+  const offerFingerprint = (c: RgstrClient, p: OfferPlan) => JSON.stringify([p.name, p.amountUsd, p.why, c.auth.org, c.baseUrl, p.floor.floorUsd, p.floor.windowClosesAt, p.floor.openOffer]);
+
+  server.registerTool(
+    'rgstr_offer_plan',
+    {
+      title: 'Plan an offer on an unclaimed name',
+      description:
+        `The plan for an offer on an unclaimed name the user cannot claim (they do not maintain it) — exactly what \`rgstr offer\` shows before it asks: the floor for the name, the amount (default: the floor), the why, any offer already open, and the rule: ${OFFER_RULE} Free: one read (the floor); nothing is filed, no card is touched. Show the user this plan; rgstr_offer_apply files it after they confirm. Needs a login. Not for a name the user maintains — they claim it, free.`,
+      inputSchema: {
+        name: z.string().describe('The unclaimed package name (`left-pad`, `@scope/pkg`).'),
+        amount: z.number().positive().optional().describe('The offer in dollars. Defaults to the floor for the name.'),
+        why: z.string().optional().describe('One line shown to the maintainer and the reviewer.'),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async ({ name, amount, why }) =>
+      run(async () => {
+        const c = await client();
+        const plan = await planOffer(c, name, { amount: amount === undefined ? undefined : String(amount), why });
+        const plan_id = remember({ kind: 'offer', plan, asWho: c.auth.org, baseUrl: c.baseUrl, fingerprint: offerFingerprint(c, plan) });
+        return text([...renderOfferPlan(plan), '', 'Nothing filed — that is the plan. After the user confirms, call rgstr_offer_apply with plan_id.'], { plan_id, ...offerPlanJson(c, plan), applied: false });
+      }),
+  );
+
+  server.registerTool(
+    'rgstr_offer_apply',
+    {
+      title: 'File the offer',
+      description: `Files the offer rgstr_offer_plan showed — that name, that amount, that why, for that organization. Returns checkoutUrl (where the user saves the card that is charged only if the offer wins) and identity (verified, or the page to verify at); the window opens once both are done, and an offer still waiting after 7 days lapses. Hand both URLs to the user. ${APPLY_RULE('rgstr_offer_plan')} Takes only the plan_id.`,
+      inputSchema: { plan_id: planIdSchema },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    },
+    async ({ plan_id }) =>
+      run(async () => {
+        const stored = take(plan_id, 'offer');
+        const c = await client();
+        sameTarget(c, stored, 'rgstr_offer_plan');
+        // Read the floor again: the window the user confirmed must be the one the
+        // offer joins, and a floor that rose past the amount is a new plan too.
+        const now = { ...stored.plan, floor: await fetchFloor(c, stored.plan.name) };
+        if (offerFingerprint(c, now) !== stored.fingerprint) throw stale('rgstr_offer_plan', 'The floor, the window or the open offer on this name changed since the plan was made.');
+        const res = await applyOffer(c, stored.plan);
+        return text(describeFiled(res), { ...offerPlanJson(c, stored.plan), ...res, filed: true, applied: true });
+      }),
+  );
+
+  server.registerTool(
+    'rgstr_offers',
+    {
+      title: "Your organization's offers",
+      description: "The offers your organization has made: name, amount, state (unverified = waiting for the card and identity verification, open, won, refunded = the maintainer claimed the name and nothing was charged, lapsed, withdrawn) and when the window closes. Reads only; needs a login. Withdrawing is `rgstr offer --withdraw <name>` in the CLI.",
+      inputSchema: {},
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async () =>
+      run(async () => {
+        const c = await client();
+        const offers = await listOffers(c);
+        const lines = offers.length ? offers.map((o) => `${o.name}: ${o.amountUsd} USD, ${offerState(o)}${o.windowClosesAt && (o.status === 'open' || o.status === 'unverified') ? `, window closes ${o.windowClosesAt}` : ''}`) : [`No offers from ${c.auth.org ?? 'your organization'}.`];
+        return text(lines, { org: c.auth.org, offers });
       }),
   );
 
