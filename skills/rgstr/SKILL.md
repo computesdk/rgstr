@@ -22,7 +22,8 @@ Install this skill: `npx skills add computesdk/rgstr --skill rgstr`
   the plan and pass `--yes` only after they agree.
 - Never claim a name the user does not maintain.
 - Reading (whois, search, check, the Markdown pages) needs no confirmation and
-  no account.
+  no account. `claim --check` is not a read: it records the proof for a claim
+  the user already confirmed.
 - Write "organization", never "org", when talking to the user.
 - The login is the user's: hand them the URL and the code and wait. Never try
   to approve it yourself.
@@ -55,7 +56,8 @@ and file and write exactly that plan, once. Show the user the plan and call
 `_apply` only after they confirm. If a README, config file or the login
 changed since the plan, apply answers `plan_stale`: run the `_plan` tool again
 and show the user the new plan.
-`rgstr_claim_check` records the proof and can complete the claim. Writes need
+`rgstr_claim_check` is `claim --check`: it records the proof for a filed
+claim, so it is not a read. Writes need
 the stored login: when a tool answers `no_credentials`, the user runs
 `npx @rgstr/cli@latest login` (or `rgstr_login` returns the URL and code for
 them). Errors come back as `isError` results with the same `code` + `hint`.
@@ -83,11 +85,12 @@ confirmation) and prints the badge for the user to add by hand.
 4. Once the badge is on the default branch (pull request merged), or shipped
    in a publish with `--here`, `npx @rgstr/cli@latest claim --check <name>`
    looks for the proof. It files nothing new and writes no files, but it
-   records the proof for the claim the user already confirmed, which can
-   complete that claim: `<name>: verified via …` means it is in; until then
+   records the proof for the claim the user already confirmed: `<name>: proof
+   found via …` means the badge is attached to the application; until then
    `<name>: no proof found yet (checked …)`.
-5. A person reviews the claim. The name goes unclaimed → under review →
-   claimed; `npx @rgstr/cli@latest whois <name>` shows where it is.
+5. A person reviews every claim; a found badge is evidence, not approval. The
+   name goes unclaimed → under review → claimed; `npx @rgstr/cli@latest whois
+   <name>` shows where it is.
 
 At a workspace root `claim` only lists the member packages; `--all` claims
 them all (confirm first). `--statement "<text>"` adds a sentence for the
@@ -118,8 +121,8 @@ No login needed.
 ## 3. Read without an account
 
 - `GET https://rgstr.org/api/v1/registry/whois/<name>`: who claims a name,
-  its trust (`unclaimed` / `claimed` / `verified`), where it routes, whether
-  a claim is under review. Scoped names go as `@scope%2Fname`.
+  its trust (`unclaimed` / `claimed` / `verified` — claimed plus paid identity
+  verification), where it routes, whether a claim is under review. Scoped names go as `@scope%2Fname`.
 - `GET https://rgstr.org/api/registry/-/v1/search?text=<q>`: claimed names
   first.
 - Any page with `Accept: text/markdown`: `https://rgstr.org/registry/<name>`,

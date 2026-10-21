@@ -79,7 +79,7 @@ export async function checkOne(c: RgstrClient, say: Say, t: ClaimTarget): Promis
   if (!pending) {
     const held = list.held.find((h) => h.name === name);
     const whois = await c.get<WhoisResponse>(`/api/v1/registry/whois/${encodeURIComponent(name)}`);
-    if (held?.status === 'verified') say(`${name}: verified — your organization claims it. ${whois.url}`);
+    if (held?.status === 'verified') say(`${name}: already claimed by your organization. ${whois.url}`);
     else if (whois.holder) say(`${name}: claimed by ${whois.holder.name} (${whois.holder.slug}) — file a claim with \`rgstr claim\` to dispute it.`);
     else say(`${name}: no application from your organization yet — run \`rgstr claim ${name}\` first.`);
     return { name, checked: false, held: held ?? null, whois };
@@ -88,8 +88,8 @@ export async function checkOne(c: RgstrClient, say: Say, t: ClaimTarget): Promis
   const result = { name, ...res, ...(res.outcome.kind === 'verified' ? { proofKind: proofKindLabel({ name, ...res.outcome }) } : {}) };
   const o = res.outcome;
   if (o.kind === 'verified') {
-    say(`${name}: verified via ${proofKindLabel({ name, ...o })} — ${o.detail}`);
-    say(o.autoApproved ? `Approved: your organization now claims ${name}.` : `Proof verified and attached to your application; ${o.reviewReason ?? 'an rgstr reviewer decides'}.`);
+    say(`${name}: proof found via ${proofKindLabel({ name, ...o })} — ${o.detail}`);
+    say(o.autoApproved ? `Approved: your organization now claims ${name}.` : `Proof found and attached to your application; ${o.reviewReason ?? 'an rgstr reviewer decides'}.`);
   } else if (o.kind === 'not_found') {
     const repo = o.repoUrl ?? pending.repoUrl ?? null;
     const where = [o.checked.length ? o.checked.join(', ') : 'npm, PyPI', repo ? `the README of ${repo}` : null].filter(Boolean).join(' and ');
@@ -181,7 +181,7 @@ export async function previewOne(
   say(`Claiming ${name} as ${ctx.asWho}`);
   const held = list.held.find((h) => h.name === name);
   if (held?.status === 'verified') {
-    say(`${name}: verified — your organization already claims it. ${c.baseUrl}/registry/${name}`);
+    say(`${name}: already claimed by your organization. ${c.baseUrl}/registry/${name}`);
     return { t, verified: true, pending: null, repoUrl: null, readme: null, outcome: { file: 'README.md', action: 'none', reason: 'already verified' } };
   }
   const pendingRecord = list.pending.find((p) => p.name === name);
@@ -230,7 +230,7 @@ export async function previewOne(
   const registry = ecosystem === 'npm' ? 'npm' : 'PyPI';
   const mismatch = !opts.here && declared && here && !matched;
   if (mismatch) {
-    say(`\n${registry} says ${shortRepo(declared!)}, this checkout is ${shortRepo(here!)} — rgstr reads the badge off ${shortRepo(declared!)}'s README, so it will not be written here. Run this in a checkout of ${shortRepo(declared!)}, or keep it in this package's README with --here (verifies on the next publish).`);
+    say(`\n${registry} says ${shortRepo(declared!)}, this checkout is ${shortRepo(here!)} — rgstr reads the badge off ${shortRepo(declared!)}'s README, so it will not be written here. Run this in a checkout of ${shortRepo(declared!)}, or keep it in this package's README with --here (rgstr reads it on the next publish).`);
     if (plan && pending) printPlan(say, plan, pending);
     preview.outcome = { file: rel, action: 'wrong_repo', reason: `declared ${declared}, checkout ${here}` };
     return preview;

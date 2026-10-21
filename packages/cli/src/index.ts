@@ -34,7 +34,7 @@ const { version } = require('../package.json') as { version: string };
 const program = new Command();
 program
   .name('rgstr')
-  .description('rgstr — claim, verify and route package names · https://rgstr.org')
+  .description('rgstr — claim, prove and route package names · https://rgstr.org')
   .version(version)
   .option('--base-url <url>', 'rgstr origin (default https://rgstr.org; RGSTR_URL)')
   .option('--allow-untrusted-host', 'allow a base URL that is not rgstr.org / computesdk.com / localhost')
@@ -334,11 +334,11 @@ program
 program
   .command('claim [name]')
   .description('claim a name for your organization and put the README badge that proves it under the first heading: shows what it will file and the README diff, asks, then files and writes — --yes skips the question (nothing else is touched)')
-  .option('--check', 'look for the proof: the badge in the repo README on GitHub, or in the README of the published package')
+  .option('--check', 'look for the proof — the badge in the repo README on GitHub, or in the README of the published package — and record it for the claim you filed; a person then approves')
   .option('-y, --yes', 'file the claim and write the badge without asking (the plan is still shown)')
   .option('--pr', 'after writing: branch rgstr-badge-<name>, commit, push, open the pull request with gh')
   .option('--all', 'at a workspace root (pnpm/npm/yarn workspaces, uv): claim every member package; without it the root only lists them')
-  .option('--here', "keep the badge in this package's own README even when the registry points at the repository root — it then verifies on the next publish (the badge ships in the package README) rather than on merge")
+  .option('--here', "keep the badge in this package's own README even when the registry points at the repository root — rgstr then reads it from the published package on the next publish rather than off GitHub after the merge")
   .addOption(new Option('--badge', 'same as --yes').hideHelp())
   .option('--npm', 'treat the package as npm')
   .option('--pip', 'treat the package as PyPI')
@@ -372,7 +372,7 @@ program
       const { previews, toWrite, what } = plan;
       const planned = () => (previews.length === 1 ? previewJson(c, previews[0]) : { packages: previews.map((p) => previewJson(c, p)) });
       if (!what) {
-        // Already under review or verified, badge already in place: nothing to do.
+        // Already under review or claimed, badge already in place: nothing to do.
         if (g.json) printJson({ ...planned(), pr: null, applied: false });
         return;
       }

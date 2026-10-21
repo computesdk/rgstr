@@ -234,7 +234,7 @@ export function createServer(options: ServerOptions = {}, version = '0.0.0'): Mc
         }
         const { c, plan, lines, opts } = r;
         const body = [...lines];
-        if (!plan.what) body.push('', 'Nothing to file, nothing to write: already under review or verified, and the badge is in place.');
+        if (!plan.what) body.push('', 'Nothing to file, nothing to write: already under review or claimed, and the badge is in place.');
         const prPossible = !!(opts.pr && plan.toWrite.length && plan.checkout?.remote);
         if (opts.pr && plan.toWrite.length && !prPossible) body.push('', 'pr: true, but this is not a git checkout with an `origin` remote, so no pull request can be opened: apply writes the badge and lists the steps to push it by hand.');
         if (plan.what) body.push('', `Nothing filed, nothing written — that is the plan. After the user confirms, call rgstr_claim_apply with plan_id to ${plan.what}${prPossible ? ' and open the badge pull request with gh' : ''}.`);

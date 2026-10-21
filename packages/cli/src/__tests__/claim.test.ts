@@ -23,7 +23,7 @@ describe('claim output', () => {
     expect(out).toContain('Add this badge to the README of https://github.com/pingdotgg/ts-rust (the repository tsc-rs declares on npm)');
     expect(out).toContain('Merge it, then run: rgstr claim --check tsc-rs');
     expect(out).toContain('```\n   In a checkout of the repository https://github.com/pingdotgg/ts-rust, run `npx @rgstr/cli claim --yes --pr tsc-rs`');
-    expect(out).toContain('it verifies on the next publish to npm. Publish, then: rgstr claim --check tsc-rs');
+    expect(out).toContain('rgstr reads it on the next publish to npm. Publish, then: rgstr claim --check tsc-rs');
     expect(out).not.toContain('"rgstr":');
     expect(out).not.toMatch(/package\.json|pyproject|--write|manifest/);
     expect(plan).not.toHaveProperty('manifest');
@@ -33,7 +33,7 @@ describe('claim output', () => {
     const plan = buildClaimPlan({ name: 'newpkg', ecosystem: 'pypi', origin: ORIGIN, token: TOKEN, repoUrl: null });
     expect(renderClaimPlan(plan)).toContain('the GitHub repository newpkg declares on PyPI (none found in its metadata yet)');
     expect(plan.agentPrompt).toContain('the GitHub repository that publishes newpkg');
-    expect(renderClaimPlan(plan)).toContain('it verifies on the next publish to PyPI');
+    expect(renderClaimPlan(plan)).toContain('rgstr reads it on the next publish to PyPI');
     expect(renderClaimPlan(plan)).not.toMatch(/\[project\.urls\]|pyproject/);
   });
 

@@ -44,7 +44,7 @@ user to approve; the login is the user's — the agent hands it over and waits.
 | `rgstr_check` | a project's dependencies: who claims each, served from where | no |
 | `rgstr_claim_plan` | what `rgstr claim` would file and the README diff | no |
 | `rgstr_claim_apply` | files the claim, writes the badge — exactly the plan | **yes** |
-| `rgstr_claim_check` | looks for the badge; records the proof, can complete the claim | yes |
+| `rgstr_claim_check` | `rgstr claim --check`: looks for the badge and records the proof for a filed claim; a person then approves | yes |
 | `rgstr_setup_plan` | the `.npmrc` / `pip.conf` lines `rgstr setup` would write | no |
 | `rgstr_setup_apply` | writes (or removes) exactly those lines | **yes** |
 | `rgstr_route_plan` | a name's routes as they would be | no |
