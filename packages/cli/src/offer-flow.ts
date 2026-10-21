@@ -69,8 +69,12 @@ export const asWhoFor = (c: RgstrClient) => c.auth.org ?? (c.auth.kind === 'api_
 
 /** Everything up to the question. One read: the floor (the API answers
  *  `name_claimed` here for a claimed name, so nothing is filed to find out). */
+export async function fetchFloor(c: RgstrClient, name: string): Promise<OfferFloor> {
+  return c.get<OfferFloor>(`/api/v1/registry/offers/floor/${encodeURIComponent(name)}`);
+}
+
 export async function planOffer(c: RgstrClient, name: string, opts: OfferOpts): Promise<OfferPlan> {
-  const floor = await c.get<OfferFloor>(`/api/v1/registry/offers/floor/${encodeURIComponent(name)}`);
+  const floor = await fetchFloor(c, name);
   const amountUsd = opts.amount === undefined ? floor.floorUsd : parseAmount(opts.amount);
   if (amountUsd < floor.floorUsd) {
     throw new RgstrCliError('invalid_argument', `${fmtUsd(amountUsd)} is below the floor for ${name} (${fmtUsd(floor.floorUsd)}).`, `Re-run with --amount ${floor.floorUsd} or more`);

@@ -39,7 +39,7 @@ import {
   type GlobalOptions,
 } from '../../cli/src/client.js';
 import { applyRoutes, planRoutes, renderRoutePlan, type RoutePlan } from '../../cli/src/route-flow.js';
-import { OFFER_RULE, applyOffer, describeFiled, listOffers, offerPlanJson, offerState, planOffer, renderOfferPlan, type OfferPlan } from '../../cli/src/offer-flow.js';
+import { OFFER_RULE, applyOffer, describeFiled, fetchFloor, listOffers, offerPlanJson, offerState, planOffer, renderOfferPlan, type OfferPlan } from '../../cli/src/offer-flow.js';
 import { applyUse, planUse, type UseChange } from '../../cli/src/use.js';
 
 export const LOGIN_HINT = 'Run `npx @rgstr/cli@latest login`';
@@ -510,8 +510,9 @@ export function createServer(options: ServerOptions = {}, version = '0.0.0'): Mc
         const stored = take(plan_id, 'offer');
         const c = await client();
         sameTarget(c, stored, 'rgstr_offer_plan');
-        // Read the floor again: the window the user confirmed must be the one the offer joins.
-        const now = await planOffer(c, stored.plan.name, { amount: String(stored.plan.amountUsd), why: stored.plan.why ?? undefined });
+        // Read the floor again: the window the user confirmed must be the one the
+        // offer joins, and a floor that rose past the amount is a new plan too.
+        const now = { ...stored.plan, floor: await fetchFloor(c, stored.plan.name) };
         if (offerFingerprint(c, now) !== stored.fingerprint) throw stale('rgstr_offer_plan', 'The floor, the window or the open offer on this name changed since the plan was made.');
         const res = await applyOffer(c, stored.plan);
         return text(describeFiled(res), { ...offerPlanJson(c, stored.plan), ...res, filed: true, applied: true });

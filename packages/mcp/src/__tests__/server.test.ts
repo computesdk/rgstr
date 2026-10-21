@@ -15,7 +15,7 @@ type Hit = { method: string; path: string; body: unknown };
 let hits: Hit[] = [];
 let pending: Array<Record<string, unknown>> = [];
 /** The window on `fastcache` as the floor read reports it; a test moves it between plan and apply. */
-let floorWindow: { openOffer: unknown; windowClosesAt: string | null } = { openOffer: null, windowClosesAt: null };
+let floorWindow: { floorUsd: number; openOffer: unknown; windowClosesAt: string | null } = { floorUsd: 10, openOffer: null, windowClosesAt: null };
 
 const json = (status: number, value: unknown) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
 const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
@@ -41,7 +41,7 @@ const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit
   }
   if (method === 'GET' && p.startsWith('/api/v1/registry/offers/floor/')) {
     const name = decodeURIComponent(p.split('/').pop()!);
-    return json(200, { name, floorUsd: 10, weeklyDownloads: 1200, ...floorWindow, url: `${BASE}/registry/${name}` });
+    return json(200, { name, weeklyDownloads: 1200, ...floorWindow, url: `${BASE}/registry/${name}` });
   }
   if (method === 'GET' && p === '/api/v1/registry/offers') {
     return json(200, { offers: [{ id: 'off-0001-abcd', name: 'fastcache', amountUsd: 400, why: 'resolve to @acme/fastcache', status: 'open', windowClosesAt: '2026-11-20T00:00:00Z', createdAt: '2026-10-21T00:00:00Z' }] });
@@ -87,7 +87,7 @@ async function pkgDir(readme = '# tsc-rs\n\nHello.\n') {
 beforeEach(async () => {
   hits = [];
   pending = [];
-  floorWindow = { openOffer: null, windowClosesAt: null };
+  floorWindow = { floorUsd: 10, openOffer: null, windowClosesAt: null };
   vi.stubGlobal('fetch', mockFetch);
   delete process.env.RGSTR_TOKEN;
   delete process.env.RGSTR_ORG;
@@ -424,7 +424,7 @@ describe('offer: plan reads the floor and files nothing, apply posts exactly the
     const client = await connect();
     const plan = await call(client, 'rgstr_offer_plan', { name: 'fastcache', amount: 400 });
     expect(textOf(plan)).not.toContain('open offer');
-    floorWindow = { openOffer: { amountUsd: 250, by: 'Other Co', windowClosesAt: '2026-11-20T00:00:00Z' }, windowClosesAt: '2026-11-20T00:00:00Z' };
+    floorWindow = { floorUsd: 10, openOffer: { amountUsd: 250, by: 'Other Co', windowClosesAt: '2026-11-20T00:00:00Z' }, windowClosesAt: '2026-11-20T00:00:00Z' };
     const r = await call(client, 'rgstr_offer_apply', { plan_id: plan.structuredContent?.plan_id });
     expect(r.isError).toBe(true);
     expect(JSON.parse(textOf(r).split('\n')[0]).code).toBe('plan_stale');
@@ -434,6 +434,17 @@ describe('offer: plan reads the floor and files nothing, apply posts exactly the
     const again = await call(client, 'rgstr_offer_plan', { name: 'fastcache', amount: 400 });
     expect(textOf(again)).toContain('open offer  $250 by Other Co, window closes Nov 20, 2026');
     expect(textOf(again)).toContain('window closes on Nov 20, 2026');
+  });
+
+  it('the floor rose past the amount after the plan: apply answers plan_stale, not invalid_argument', async () => {
+    const client = await connect();
+    const plan = await call(client, 'rgstr_offer_plan', { name: 'fastcache', amount: 400 });
+    floorWindow = { floorUsd: 500, openOffer: null, windowClosesAt: null };
+    const r = await call(client, 'rgstr_offer_apply', { plan_id: plan.structuredContent?.plan_id });
+    expect(r.isError).toBe(true);
+    expect(JSON.parse(textOf(r).split('\n')[0]).code).toBe('plan_stale');
+    expect(textOf(r).split('\n').pop()).toBe('Run rgstr_offer_plan again and show the user the new plan');
+    expect(writes()).toEqual([]);
   });
 
   it('offer_identity_required on apply: the identity URL is the last line', async () => {
