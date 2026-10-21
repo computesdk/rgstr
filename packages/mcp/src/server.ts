@@ -148,11 +148,13 @@ export function createServer(options: ServerOptions = {}, version = '0.0.0'): Mc
   // What became of the last rgstr_login, for no_credentials to mention.
   let lastLogin: LoginOutcome | null = null;
   const loginNote = async () => {
-    // Snapshot: a concurrent rgstr_login may consume the outcome while we await.
+    if (!lastLogin) return undefined;
+    // Resolve the registry first, then read the outcome once: nothing can
+    // change it between the read and the text.
+    const base = await resolveBaseUrl(options).catch(() => null);
     const o = lastLogin;
-    if (!o) return undefined;
     // A login for another registry (RGSTR_URL changed since) says nothing about this one.
-    if (o.baseUrl !== (await resolveBaseUrl(options).catch(() => null))) return undefined;
+    if (!o || o.baseUrl !== base) return undefined;
     if (o.state === 'waiting') return `a login is waiting for approval at ${o.url} (code ${o.code})`;
     if (o.state === 'approved') return `the last login was approved${o.organization ? ` for ${o.organization}` : ''}; if this server still has no credentials, call rgstr_login again`;
     return `the last login was ${o.state}: ${o.detail}; call rgstr_login again`;
