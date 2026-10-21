@@ -505,6 +505,11 @@ export function createServer(options: ServerOptions = {}, version = '0.0.0'): Mc
           lastLogin.delete(baseUrl);
           return text(describeOutcome(finished), { ...finished });
         }
+        // One credentials file: a second flow would overwrite the first registry's token on approval.
+        const [otherUrl, other] = [...login.entries()].find(([u]) => u !== baseUrl) ?? [];
+        if (otherUrl && other) {
+          throw new RgstrCliError('conflict', `A login for ${otherUrl} is still waiting for approval (code ${other.code}); the CLI stores one login at a time.`, `Have the user approve or reject it at ${other.url}, then call rgstr_login again for ${baseUrl}`);
+        }
         let promptArrived!: (p: { url: string; code: string }) => void;
         const prompted = new Promise<{ url: string; code: string }>((resolve) => {
           promptArrived = resolve;

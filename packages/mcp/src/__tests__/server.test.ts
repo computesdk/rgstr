@@ -318,6 +318,12 @@ describe('routes and setup: plan then apply', () => {
     process.env.RGSTR_URL = 'https://other.example';
     expect(textOf(await call(client, 'rgstr_claim_plan', { cwd: dir })).split('\n').pop()).not.toContain('waiting for approval');
     process.env.RGSTR_URL = BASE;
+    // While A's login is pending, another registry cannot start one: the credentials file holds one login.
+    process.env.RGSTR_URL = 'http://127.0.0.1:4199';
+    const busy = await call(client, 'rgstr_login', {});
+    expect(busy.isError).toBe(true);
+    expect(textOf(busy)).toContain(`A login for ${BASE} is still waiting for approval (code ABCD-EFGH)`);
+    process.env.RGSTR_URL = BASE;
     reject(new DeviceFlowError('access_denied', 'The user denied the request.'));
     await new Promise((r) => setTimeout(r, 10));
     const after = await call(client, 'rgstr_claim_plan', { cwd: dir });
@@ -330,8 +336,10 @@ describe('routes and setup: plan then apply', () => {
     const report = await call(client, 'rgstr_login', {});
     expect(report.structuredContent?.state).toBe('rejected');
     expect(textOf(report)).toContain('Call rgstr_login again to start a new one.');
-    // Reported once; the next call starts a new login.
-    expect((await call(client, 'rgstr_login', {})).structuredContent?.state).toBe('waiting');
+    // Reported once; the next call would start a new login — but B's is still pending.
+    const blocked = await call(client, 'rgstr_login', {});
+    expect(blocked.isError).toBe(true);
+    expect(textOf(blocked)).toContain('A login for http://127.0.0.1:4199 is still waiting for approval');
     delete process.env.RGSTR_URL;
   });
 });
