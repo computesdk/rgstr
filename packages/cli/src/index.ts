@@ -513,7 +513,7 @@ program
           res.objects.map((o) => [
             o.package.name,
             o.package.version ?? '',
-            o.rgstr.trust + (o.rgstr.owner?.slug ? ` (${o.rgstr.owner.slug})` : ''),
+            o.rgstr.trust + (o.rgstr.owner ? ` (${o.rgstr.owner})` : ''),
             fmtDownloads(o.rgstr.weeklyDownloads),
             relation(o.rgstr.demotion),
             (o.package.description ?? '').slice(0, 60),
