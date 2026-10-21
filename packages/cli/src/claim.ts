@@ -155,7 +155,7 @@ export function renderClaimPlan(p: ClaimPlan): string {
     indent('```\n' + p.agentPrompt + '\n```'),
     '',
     `3. Or put the same badge in the README that ships with the package (\`rgstr claim --here\` in its checkout);`,
-    `   it verifies on the next publish to ${index}. Publish, then: rgstr claim --check ${p.name}`,
+    `   rgstr reads it on the next publish to ${index}. Publish, then: rgstr claim --check ${p.name}`,
   ].join('\n');
 }
 

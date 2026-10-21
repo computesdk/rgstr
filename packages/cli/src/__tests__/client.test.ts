@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { RgstrClient, RgstrCliError, isSecureTransport, isTrustedHost, resolveAuth } from '../client.js';
+import { RgstrApiError, RgstrClient, RgstrCliError, isSecureTransport, isTrustedHost, renderError, resolveAuth, toErrorEnvelope } from '../client.js';
 import { deviceLogin, discoverAuthServer, oauthClients, requestDeviceCode } from '../auth.js';
 import { parseRouteSpec, sameRoutes, type RouteRecord } from '../routes.js';
 
@@ -208,5 +208,24 @@ describe('sameRoutes', () => {
     expect(sameRoutes([a], [{ ...a, id: 'r9' }])).toBe(false);
     expect(sameRoutes([a], [{ ...a, position: 3 }])).toBe(false);
     expect(sameRoutes([], [])).toBe(true);
+  });
+});
+
+describe('API error envelope', () => {
+  it('RgstrApiError surfaces code, hint, requestId and details from the body', () => {
+    const body = { error: 'Nope', code: 'claim_pending', hint: 'Poll it', requestId: 'req_1', details: { outcome: { kind: 'not_found' } } };
+    const err = new RgstrApiError(409, 'Nope', body);
+    expect(err.code).toBe('claim_pending');
+    expect(err.hint).toBe('Poll it');
+    expect(err.requestId).toBe('req_1');
+    expect(err.details).toEqual({ outcome: { kind: 'not_found' } });
+    expect(toErrorEnvelope(err)).toEqual({ error: 'Nope', status: 409, code: 'claim_pending', hint: 'Poll it', requestId: 'req_1' });
+    expect(renderError(toErrorEnvelope(err))).toBe('Error: Nope\nPoll it');
+  });
+  it('a body without the fields leaves them out; the hint line is omitted', () => {
+    const err = new RgstrApiError(502, '502 Bad Gateway', 'upstream text');
+    expect(toErrorEnvelope(err)).toEqual({ error: '502 Bad Gateway', status: 502 });
+    expect(renderError(toErrorEnvelope(err))).toBe('Error: 502 Bad Gateway');
+    expect(toErrorEnvelope(new RgstrCliError('not_holder', 'x', 'See `rgstr whois x`'))).toEqual({ error: 'x', code: 'not_holder', hint: 'See `rgstr whois x`' });
   });
 });
