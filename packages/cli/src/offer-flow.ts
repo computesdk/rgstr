@@ -36,6 +36,8 @@ export interface OfferRecord {
   windowClosesAt: string | null;
   createdAt: string;
   url?: string;
+  /** The offering organization; `identityVerified` says which step an unverified offer still waits on. */
+  organization?: { name?: string; slug?: string; identityVerified?: boolean } | null;
 }
 
 export interface OfferResponse {
@@ -103,8 +105,8 @@ export function renderOfferPlan(p: OfferPlan): string[] {
   lines.push('');
   lines.push(
     floor.windowClosesAt
-      ? `Files the offer: your card is saved and charged ${fmtUsd(p.amountUsd)} only if yours is the highest offer standing when the window closes on ${fmtDate(floor.windowClosesAt)}; the name is then registered to you.`
-      : `Files the offer: your card is saved and charged ${fmtUsd(p.amountUsd)} only if your offer wins. The 30-day window opens once the card is saved and your organization's identity is verified; if nobody who maintains ${p.name} claims it by then, the name is registered to you.`,
+      ? `Files the offer and returns a checkout link where you save the card — charged ${fmtUsd(p.amountUsd)} only if yours is the highest offer standing when the window closes on ${fmtDate(floor.windowClosesAt)}; the name is then registered to you. The offer joins the window once the card is saved and your organization's identity is verified.`
+      : `Files the offer and returns a checkout link where you save the card — charged ${fmtUsd(p.amountUsd)} only if your offer wins. The 30-day window opens once the card is saved and your organization's identity is verified; if nobody who maintains ${p.name} claims it by then, the name is registered to you.`,
   );
   lines.push(OFFER_RULE);
   return lines;
@@ -149,6 +151,7 @@ const STATE_WORDS: Record<OfferStatus, string> = {
 };
 
 export function offerState(o: OfferRecord): string {
+  if (o.status === 'unverified' && o.organization?.identityVerified === true) return 'waiting for the card';
   return STATE_WORDS[o.status] ?? o.status;
 }
 

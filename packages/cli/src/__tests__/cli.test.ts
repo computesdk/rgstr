@@ -76,7 +76,15 @@ beforeAll(async () => {
         return json(200, { name, floorUsd: 10, weeklyDownloads: 1200, openOffer: name === 'contested' ? { amountUsd: 250, by: 'Other Co', windowClosesAt: '2026-11-20T00:00:00Z' } : null, windowClosesAt: name === 'contested' ? '2026-11-20T00:00:00Z' : null, url: `${base}/registry/${name}` });
       }
       if (req.method === 'GET' && url.pathname === '/api/v1/registry/offers') {
-        return json(200, { offers: [{ id: 'off-0001-abcd', name: 'fastcache', amountUsd: 400, why: 'resolve to @acme/fastcache', status: 'open', windowClosesAt: '2026-11-20T00:00:00Z', createdAt: '2026-10-21T00:00:00Z', url: `${base}/registry/fastcache` }, { id: 'off-0002-efgh', name: 'oldname', amountUsd: 10, why: null, status: 'refunded', windowClosesAt: '2026-09-01T00:00:00Z', createdAt: '2026-08-01T00:00:00Z' }] });
+        return json(200, {
+          offers: [
+            { id: 'off-0001-abcd', name: 'fastcache', amountUsd: 400, why: 'resolve to @acme/fastcache', status: 'open', windowClosesAt: '2026-11-20T00:00:00Z', createdAt: '2026-10-21T00:00:00Z', url: `${base}/registry/fastcache` },
+            { id: 'off-0002-efgh', name: 'oldname', amountUsd: 10, why: null, status: 'refunded', windowClosesAt: '2026-09-01T00:00:00Z', createdAt: '2026-08-01T00:00:00Z' },
+            // Identity already verified: only the card is outstanding.
+            { id: 'off-0004-mnop', name: 'cardless', amountUsd: 25, why: null, status: 'unverified', windowClosesAt: null, createdAt: '2026-10-21T00:00:00Z', organization: { name: 'Acme', slug: 'acme', identityVerified: true } },
+            { id: 'off-0005-qrst', name: 'bothpending', amountUsd: 25, why: null, status: 'unverified', windowClosesAt: null, createdAt: '2026-10-21T00:00:00Z', organization: { name: 'Acme', slug: 'acme', identityVerified: false } },
+          ],
+        });
       }
       if (req.method === 'POST' && url.pathname === '/api/v1/registry/offers') {
         const { name, amountUsd, why } = body as { name: string; amountUsd: number; why: string | null };
@@ -364,7 +372,7 @@ describe('rgstr offer files nothing until --yes', () => {
     expect(r.stdout).toContain('floor   $10 (1.2k/wk on the busiest index)');
     expect(r.stdout).toContain('amount  $400');
     expect(r.stdout).toContain('why     resolve to @acme/fastcache');
-    expect(r.stdout).toContain('your card is saved and charged $400 only if your offer wins');
+    expect(r.stdout).toContain('returns a checkout link where you save the card — charged $400 only if your offer wins');
     expect(r.stdout).not.toContain('hold');
     expect(r.stdout).toContain(RULE);
     expect(r.stdout).toContain('Re-run with --yes to file the offer for fastcache as acme.');
@@ -450,8 +458,10 @@ describe('rgstr offer files nothing until --yes', () => {
     expect(r.stdout).toMatch(/^name\s+amount\s+state\s+window closes$/m);
     expect(r.stdout).toMatch(/^fastcache\s+\$400\s+open\s+Nov 20, 2026$/m);
     expect(r.stdout).toMatch(/^oldname\s+\$10\s+closed — the maintainer claimed the name; nothing was charged\s+—$/m);
+    expect(r.stdout).toMatch(/^cardless\s+\$25\s+waiting for the card\s+—$/m);
+    expect(r.stdout).toMatch(/^bothpending\s+\$25\s+waiting for the card and identity verification\s+—$/m);
     expect(writes()).toHaveLength(0);
-    expect(JSON.parse((await rgstr(['--json', 'offers'], dir)).stdout).offers).toHaveLength(2);
+    expect(JSON.parse((await rgstr(['--json', 'offers'], dir)).stdout).offers).toHaveLength(4);
   });
 
   it('--withdraw: shows the offer, POSTs the withdrawal only with --yes', async () => {

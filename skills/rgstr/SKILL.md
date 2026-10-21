@@ -186,7 +186,7 @@ scopes.
    saved and the identity is verified`; an offer still waiting after 7 days
    lapses and is never shown to the maintainer. No command needs re-running.
 4. `npx @rgstr/cli@latest offers` lists the organization's offers: name,
-   amount, state (`waiting for the card and identity verification`, `open`,
+   amount, state (`waiting for the card` / `waiting for the card and identity verification`, `open`,
    `won — name registered`, `closed — the maintainer claimed the name; nothing
    was charged`, `lapsed`, `withdrawn`) and when the window closes. `npx
    @rgstr/cli@latest offer --withdraw <name>` ends an open offer, after
