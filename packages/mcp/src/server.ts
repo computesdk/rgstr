@@ -145,16 +145,15 @@ export function createServer(options: ServerOptions = {}, version = '0.0.0'): Mc
     JSON.stringify(await Promise.all(plan.previews.map(async (p) => [p.t.name, p.t.manifest ?? null, await bytes(p.t.manifest), p.readme?.file ?? null, await bytes(p.readme?.file)])));
   const dirOf = (cwd?: string, manifest?: string) => path.resolve(cwd ?? (manifest ? path.dirname(manifest) : options.cwd ?? process.cwd()));
   const client = async (optional = false) => new RgstrClient(await resolveAuth({ ...options, optional }));
-  // What became of the last rgstr_login, for no_credentials to mention.
-  let lastLogin: LoginOutcome | null = null;
+  // What became of the last rgstr_login per registry, for no_credentials to
+  // mention; a login for another registry (RGSTR_URL changed since) says
+  // nothing about this one.
+  const lastLogin = new Map<string, LoginOutcome>();
   const loginNote = async () => {
-    if (!lastLogin) return undefined;
-    // Resolve the registry first, then read the outcome once: nothing can
-    // change it between the read and the text.
+    if (lastLogin.size === 0) return undefined;
     const base = await resolveBaseUrl(options).catch(() => null);
-    const o = lastLogin;
-    // A login for another registry (RGSTR_URL changed since) says nothing about this one.
-    if (!o || o.baseUrl !== base) return undefined;
+    const o = base ? lastLogin.get(base) : undefined;
+    if (!o) return undefined;
     if (o.state === 'waiting') return `a login is waiting for approval at ${o.url} (code ${o.code})`;
     if (o.state === 'approved') return `the last login was approved${o.organization ? ` for ${o.organization}` : ''}; if this server still has no credentials, call rgstr_login again`;
     return `the last login was ${o.state}: ${o.detail}; call rgstr_login again`;
@@ -468,7 +467,7 @@ export function createServer(options: ServerOptions = {}, version = '0.0.0'): Mc
 
   // ── login ───────────────────────────────────────────────────────────────
 
-  let login: { url: string; code: string; done: Promise<void> } | null = null;
+  const login = new Map<string, { url: string; code: string; done: Promise<void> }>();
   const describeOutcome = (o: LoginOutcome) => {
     switch (o.state) {
       case 'waiting':
@@ -494,15 +493,23 @@ export function createServer(options: ServerOptions = {}, version = '0.0.0'): Mc
     },
     async () =>
       run(async () => {
-        if (login) return text(describeOutcome(lastLogin!), { ...lastLogin });
-        if (lastLogin && lastLogin.state !== 'waiting') {
-          // Report the finished login once; the next call starts over.
-          const outcome = lastLogin;
-          lastLogin = null;
-          return text(describeOutcome(outcome), { ...outcome });
-        }
+        // The registry first: outcomes are kept per registry, so a switch of
+        // RGSTR_URL starts fresh instead of reporting another registry's login.
         const baseUrl = await resolveBaseUrl(options);
         assertHostAllowed(baseUrl, options.allowUntrustedHost);
+        const waiting = login.get(baseUrl);
+        if (waiting) return text(describeOutcome(lastLogin.get(baseUrl)!), { ...lastLogin.get(baseUrl) });
+        const finished = lastLogin.get(baseUrl);
+        if (finished && finished.state !== 'waiting') {
+          // Report the finished login once; the next call starts over.
+          lastLogin.delete(baseUrl);
+          return text(describeOutcome(finished), { ...finished });
+        }
+        // One credentials file: a second flow would overwrite the first registry's token on approval.
+        const [otherUrl, other] = [...login.entries()].find(([u]) => u !== baseUrl) ?? [];
+        if (otherUrl && other) {
+          throw new RgstrCliError('conflict', `A login for ${otherUrl} is still waiting for approval (code ${other.code}); the CLI stores one login at a time.`, `Have the user approve or reject it at ${other.url}, then call rgstr_login again for ${baseUrl}`);
+        }
         let promptArrived!: (p: { url: string; code: string }) => void;
         const prompted = new Promise<{ url: string; code: string }>((resolve) => {
           promptArrived = resolve;
@@ -515,30 +522,31 @@ export function createServer(options: ServerOptions = {}, version = '0.0.0'): Mc
           // The same as `rgstr login`: the one organization the user has becomes the active one.
           .then((creds) => rememberOrganization(baseUrl, creds.token, options))
           .then(({ org }) => {
-            lastLogin = { state: 'approved', organization: org, baseUrl, at: new Date().toISOString() };
+            lastLogin.set(baseUrl, { state: 'approved', organization: org, baseUrl, at: new Date().toISOString() });
           })
           .catch((err: unknown) => {
             const code = err instanceof DeviceFlowError ? err.code : null;
             const state: LoginOutcome['state'] = code === 'access_denied' ? 'rejected' : code === 'expired_token' ? 'expired' : 'failed';
             const detail = err instanceof RgstrCliError && err.hint ? `${err.message} — ${err.hint}` : err instanceof Error ? err.message : String(err);
-            lastLogin = { state, detail, baseUrl, at: new Date().toISOString() };
+            lastLogin.set(baseUrl, { state, detail, baseUrl, at: new Date().toISOString() });
             throw err;
           })
           .finally(() => {
-            login = null;
+            login.delete(baseUrl);
           });
         done.catch(() => undefined);
         // The prompt arrives before the first poll; wait for it (or for the
         // login to fail before issuing one), not for the user.
         const prompt = await Promise.race([prompted, done.then(() => null, () => null)]);
         if (!prompt) {
-          const failed = lastLogin;
-          lastLogin = null;
+          const failed = lastLogin.get(baseUrl);
+          lastLogin.delete(baseUrl);
           throw new RgstrCliError('invalid_argument', `The login ended before a code was issued${failed?.detail ? `: ${failed.detail}` : '.'}`, 'Call rgstr_login again');
         }
-        login = { ...prompt, done };
-        lastLogin = { state: 'waiting', ...prompt, baseUrl, at: new Date().toISOString() };
-        return text(`Ask the user to open ${prompt.url} and enter the code ${prompt.code}. Once they approve, the login is stored; call the tool you wanted again (or rgstr_login to see how it went).`, { ...lastLogin });
+        login.set(baseUrl, { ...prompt, done });
+        const started: LoginOutcome = { state: 'waiting', ...prompt, baseUrl, at: new Date().toISOString() };
+        lastLogin.set(baseUrl, started);
+        return text(`Ask the user to open ${prompt.url} and enter the code ${prompt.code}. Once they approve, the login is stored; call the tool you wanted again (or rgstr_login to see how it went).`, { ...started });
       }),
   );
 
