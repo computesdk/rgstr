@@ -148,18 +148,20 @@ export function createServer(options: ServerOptions = {}, version = '0.0.0'): Mc
   // What became of the last rgstr_login, for no_credentials to mention.
   let lastLogin: LoginOutcome | null = null;
   const loginNote = async () => {
-    if (!lastLogin) return undefined;
+    // Snapshot: a concurrent rgstr_login may consume the outcome while we await.
+    const o = lastLogin;
+    if (!o) return undefined;
     // A login for another registry (RGSTR_URL changed since) says nothing about this one.
-    if (lastLogin.baseUrl !== (await resolveBaseUrl(options).catch(() => null))) return undefined;
-    if (lastLogin.state === 'waiting') return `a login is waiting for approval at ${lastLogin.url} (code ${lastLogin.code})`;
-    if (lastLogin.state === 'approved') return `the last login was approved${lastLogin.organization ? ` for ${lastLogin.organization}` : ''}; if this server still has no credentials, call rgstr_login again`;
-    return `the last login was ${lastLogin.state}: ${lastLogin.detail}; call rgstr_login again`;
+    if (o.baseUrl !== (await resolveBaseUrl(options).catch(() => null))) return undefined;
+    if (o.state === 'waiting') return `a login is waiting for approval at ${o.url} (code ${o.code})`;
+    if (o.state === 'approved') return `the last login was approved${o.organization ? ` for ${o.organization}` : ''}; if this server still has no credentials, call rgstr_login again`;
+    return `the last login was ${o.state}: ${o.detail}; call rgstr_login again`;
   };
   const run = async (fn: () => Promise<CallToolResult>): Promise<CallToolResult> => {
     try {
       return await fn();
     } catch (err) {
-      return errorResult(err, await loginNote());
+      return errorResult(err, await loginNote().catch(() => undefined));
     }
   };
 
