@@ -1,7 +1,7 @@
 {
   "name": "@rgstr/mcp",
-  "version": "0.0.1",
-  "description": "rgstr (https://rgstr.org) as MCP tools: whois, search, check, and plan/apply for claim, setup and routes \u2014 confirm before apply.",
+  "version": "0.0.2",
+  "description": "rgstr (https://rgstr.org) as MCP tools: whois, search, check, and plan/apply for claim, setup and routes — confirm before apply.",
   "type": "module",
   "license": "MIT",
   "repository": {

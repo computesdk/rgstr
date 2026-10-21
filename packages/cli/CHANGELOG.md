@@ -1,5 +1,13 @@
 # @rgstr/cli
 
+## 0.0.11
+
+### Patch Changes
+
+- 12ec4f5: ships the rgstr agent skill (`skills/rgstr/SKILL.md`, `npx skills add computesdk/rgstr --skill rgstr`)
+- b866ae3: API errors print their next step: `RgstrApiError` carries the API's `code`, `hint`, `requestId` and `details`; the CLI prints the hint as the last line of any failure and `--json` includes `code`, `hint` and `requestId`. `claim --check` reads the platform's 422 `proof_not_found` as "no proof yet" and prints its hint. The claim, route and check flows moved into importable modules (`claim-flow`, `route-flow`, `check-flow`) that `@rgstr/mcp` shares; the repository is now a pnpm workspace (`packages/cli`, `packages/mcp`).
+- c7bbff7: One story on every surface. `--help` says `claim, prove and route` (not "verify"); `claim --check` says it records the proof for the claim you filed and a person then approves; `--here` says rgstr reads the badge on the next publish. `claim --check` prints `proof found via …` instead of `verified via …`, and an already-claimed name prints `already claimed by your organization`. README, `packages/mcp/README.md` and `skills/rgstr/SKILL.md` agree: the README badge is the only proof, every claim is an application a person reviews, `claim --check` / `rgstr_claim_check` are not reads, "verified" is paid identity verification only.
+
 ## 0.0.10
 
 ### Patch Changes
