@@ -72,7 +72,9 @@ only for an unclaimed name the user does not maintain (a maintainer claims,
 free). `rgstr_offer_plan` reads the floor and shows the plan with the rule in
 plain words; the server's instructions say to show it and confirm before
 `rgstr_offer_apply`. The plan is fingerprinted on name, amount, why, the active
-organization and the registry URL: if any changed, apply answers `plan_stale`.
+organization, the registry URL, and what the user was shown about the name —
+the floor, the window and the open offer, read again at apply: if any changed,
+apply answers `plan_stale` and files nothing.
 Filing needs the organization's identity verified; otherwise the API answers
 `offer_identity_required` and the hint is the identity page. Other codes to
 expect: `offer_below_floor`, `offer_limit_reached`, `name_claimed`,

@@ -470,8 +470,10 @@ export function createServer(options: ServerOptions = {}, version = '0.0.0'): Mc
 
   // ── offer ───────────────────────────────────────────────────────────────
 
-  /** What the plan was made of: the same inputs, organization and registry, or it is a new plan. */
-  const offerFingerprint = (c: RgstrClient, p: OfferPlan) => JSON.stringify([p.name, p.amountUsd, p.why, c.auth.org, c.baseUrl]);
+  /** What the plan was made of — the inputs, the organization and the registry, and
+   *  what the user was shown about the name: the floor, the window and the open
+   *  offer. Another offer opening the window after the plan means a new plan. */
+  const offerFingerprint = (c: RgstrClient, p: OfferPlan) => JSON.stringify([p.name, p.amountUsd, p.why, c.auth.org, c.baseUrl, p.floor.floorUsd, p.floor.windowClosesAt, p.floor.openOffer]);
 
   server.registerTool(
     'rgstr_offer_plan',
@@ -508,7 +510,9 @@ export function createServer(options: ServerOptions = {}, version = '0.0.0'): Mc
         const stored = take(plan_id, 'offer');
         const c = await client();
         sameTarget(c, stored, 'rgstr_offer_plan');
-        if (offerFingerprint(c, stored.plan) !== stored.fingerprint) throw stale('rgstr_offer_plan', 'The offer or the login changed since the plan was made.');
+        // Read the floor again: the window the user confirmed must be the one the offer joins.
+        const now = await planOffer(c, stored.plan.name, { amount: String(stored.plan.amountUsd), why: stored.plan.why ?? undefined });
+        if (offerFingerprint(c, now) !== stored.fingerprint) throw stale('rgstr_offer_plan', 'The floor, the window or the open offer on this name changed since the plan was made.');
         const res = await applyOffer(c, stored.plan);
         return text(describeFiled(res), { ...offerPlanJson(c, stored.plan), ...res, filed: true, applied: true });
       }),
