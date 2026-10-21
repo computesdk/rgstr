@@ -53,14 +53,15 @@ Reads: `rgstr_whois`, `rgstr_search`, `rgstr_check`. Changes are two tools:
 tools are free — they show exactly what would be filed or written and change
 nothing and return a `plan_id`; the `_apply` tools take only that `plan_id`
 and file and write exactly that plan, once. Show the user the plan and call
-`_apply` only after they confirm. If a README, config file or the login
-changed since the plan, apply answers `plan_stale`: run the `_plan` tool again
-and show the user the new plan.
+`_apply` only after they confirm. If a README, config file, the login or the
+active organization changed since the plan, apply answers `plan_stale`: run
+the `_plan` tool again and show the user the new plan.
 `rgstr_claim_check` is `claim --check`: it records the proof for a filed
 claim, so it is not a read. Writes need
 the stored login: when a tool answers `no_credentials`, the user runs
 `npx @rgstr/cli@latest login` (or `rgstr_login` returns the URL and code for
-them). Errors come back as `isError` results with the same `code` + `hint`.
+them; call it again for the outcome — waiting, approved, rejected or
+expired). Errors come back as `isError` results with the same `code` + `hint`.
 
 ## 1. Claim a name
 
