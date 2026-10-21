@@ -304,7 +304,9 @@ describe('routes and setup: plan then apply', () => {
         reject = rej;
       });
     });
-    const client = await connect({ baseUrl: BASE, loginFlow: flow as never });
+    // No explicit baseUrl: the registry comes from RGSTR_URL, so a change of host is visible.
+    process.env.RGSTR_URL = BASE;
+    const client = await connect({ loginFlow: flow as never });
     const first = await call(client, 'rgstr_login', {});
     expect(first.structuredContent).toMatchObject({ state: 'waiting', url: 'https://rgstr.org/device', code: 'ABCD-EFGH' });
     expect((await call(client, 'rgstr_login', {})).structuredContent?.state).toBe('waiting');
@@ -312,6 +314,10 @@ describe('routes and setup: plan then apply', () => {
     const waiting = await call(client, 'rgstr_claim_plan', { cwd: dir });
     expect(waiting.isError).toBe(true);
     expect(textOf(waiting).split('\n').pop()).toContain('a login is waiting for approval at https://rgstr.org/device (code ABCD-EFGH)');
+    // A login for another registry says nothing about this one.
+    process.env.RGSTR_URL = 'https://other.example';
+    expect(textOf(await call(client, 'rgstr_claim_plan', { cwd: dir })).split('\n').pop()).not.toContain('waiting for approval');
+    process.env.RGSTR_URL = BASE;
     reject(new DeviceFlowError('access_denied', 'The user denied the request.'));
     await new Promise((r) => setTimeout(r, 10));
     const after = await call(client, 'rgstr_claim_plan', { cwd: dir });
@@ -321,5 +327,6 @@ describe('routes and setup: plan then apply', () => {
     expect(textOf(report)).toContain('Call rgstr_login again to start a new one.');
     // Reported once; the next call starts a new login.
     expect((await call(client, 'rgstr_login', {})).structuredContent?.state).toBe('waiting');
+    delete process.env.RGSTR_URL;
   });
 });

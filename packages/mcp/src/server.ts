@@ -76,6 +76,8 @@ export interface LoginOutcome {
   organization?: string | null;
   /** Why it failed (rejected / expired / failed). */
   detail?: string;
+  /** The registry the login was for; a note about it is only shown for that host. */
+  baseUrl: string;
   at: string;
 }
 
@@ -145,8 +147,10 @@ export function createServer(options: ServerOptions = {}, version = '0.0.0'): Mc
   const client = async (optional = false) => new RgstrClient(await resolveAuth({ ...options, optional }));
   // What became of the last rgstr_login, for no_credentials to mention.
   let lastLogin: LoginOutcome | null = null;
-  const loginNote = () => {
+  const loginNote = async () => {
     if (!lastLogin) return undefined;
+    // A login for another registry (RGSTR_URL changed since) says nothing about this one.
+    if (lastLogin.baseUrl !== (await resolveBaseUrl(options).catch(() => null))) return undefined;
     if (lastLogin.state === 'waiting') return `a login is waiting for approval at ${lastLogin.url} (code ${lastLogin.code})`;
     if (lastLogin.state === 'approved') return `the last login was approved${lastLogin.organization ? ` for ${lastLogin.organization}` : ''}; if this server still has no credentials, call rgstr_login again`;
     return `the last login was ${lastLogin.state}: ${lastLogin.detail}; call rgstr_login again`;
@@ -155,7 +159,7 @@ export function createServer(options: ServerOptions = {}, version = '0.0.0'): Mc
     try {
       return await fn();
     } catch (err) {
-      return errorResult(err, loginNote());
+      return errorResult(err, await loginNote());
     }
   };
 
@@ -507,13 +511,13 @@ export function createServer(options: ServerOptions = {}, version = '0.0.0'): Mc
           // The same as `rgstr login`: the one organization the user has becomes the active one.
           .then((creds) => rememberOrganization(baseUrl, creds.token, options))
           .then(({ org }) => {
-            lastLogin = { state: 'approved', organization: org, at: new Date().toISOString() };
+            lastLogin = { state: 'approved', organization: org, baseUrl, at: new Date().toISOString() };
           })
           .catch((err: unknown) => {
             const code = err instanceof DeviceFlowError ? err.code : null;
             const state: LoginOutcome['state'] = code === 'access_denied' ? 'rejected' : code === 'expired_token' ? 'expired' : 'failed';
             const detail = err instanceof RgstrCliError && err.hint ? `${err.message} — ${err.hint}` : err instanceof Error ? err.message : String(err);
-            lastLogin = { state, detail, at: new Date().toISOString() };
+            lastLogin = { state, detail, baseUrl, at: new Date().toISOString() };
             throw err;
           })
           .finally(() => {
@@ -529,7 +533,7 @@ export function createServer(options: ServerOptions = {}, version = '0.0.0'): Mc
           throw new RgstrCliError('invalid_argument', `The login ended before a code was issued${failed?.detail ? `: ${failed.detail}` : '.'}`, 'Call rgstr_login again');
         }
         login = { ...prompt, done };
-        lastLogin = { state: 'waiting', ...prompt, at: new Date().toISOString() };
+        lastLogin = { state: 'waiting', ...prompt, baseUrl, at: new Date().toISOString() };
         return text(`Ask the user to open ${prompt.url} and enter the code ${prompt.code}. Once they approve, the login is stored; call the tool you wanted again (or rgstr_login to see how it went).`, { ...lastLogin });
       }),
   );
