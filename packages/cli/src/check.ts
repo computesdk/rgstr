@@ -235,9 +235,12 @@ export interface WhoisLike {
   name: string;
   url: string;
   trust: 'unclaimed' | 'claimed' | 'verified';
-  state: 'unclaimed' | 'pending' | 'held' | 'disputed';
+  state: 'unclaimed' | 'pending' | 'held' | 'disputed' | 'registered';
   holder: { name: string; slug: string } | null;
   routes: RouteRecord[];
+  /** Set for a registered name: who registered it and the name it resolves to. */
+  registrant?: { name: string; slug: string } | null;
+  routesTo?: string | null;
 }
 
 export interface CheckRow {
@@ -249,6 +252,11 @@ export interface CheckRow {
   holder: string | null;
   /** True when the claiming organization's answer (routes or default) is what installs get. */
   held: boolean;
+  /** True when an organization registered the name through an offer (no maintainer has claimed it); installs get the registrant's route. */
+  registered: boolean;
+  /** The registrant's display name and the name it routes to, for a registered name. */
+  registrant: string | null;
+  routesTo: string | null;
   /** Where an install of this name is served from, in words. */
   servedFrom: string;
   routes: Array<{ versionRange: string; upstreamKind: string; upstream: string; upstreamName: string | null }>;
@@ -262,16 +270,15 @@ const INDEX_LABEL: Record<Ecosystem, string> = { npm: 'npm', pypi: 'PyPI' };
 /** One dependency's line. `held` is true only when the claiming organization's routes (or its
  *  default) decide the install — never for a pending application. */
 export function checkRow(dep: Dependency, w: WhoisLike): CheckRow {
-  const held = !!w.holder && w.trust !== 'unclaimed';
+  const registered = w.state === 'registered';
+  const held = !registered && !!w.holder && w.trust !== 'unclaimed';
   const index = INDEX_LABEL[dep.ecosystem];
+  const routeList = () => w.routes.map((r) => `${r.upstreamKind}:${r.upstreamName ?? w.name}${r.versionRange && r.versionRange !== '*' ? `@${r.versionRange}` : ''}`).join(', ');
   let servedFrom: string;
-  if (!held) servedFrom = `${index} (unchanged)`;
+  if (registered) servedFrom = `${w.routes.length ? routeList() : `${index}:${w.routesTo ?? w.name}`} (registrant's route)`;
+  else if (!held) servedFrom = `${index} (unchanged)`;
   else if (w.routes.length === 0) servedFrom = `${index}:${w.name} (claimant's default)`;
-  else {
-    servedFrom = w.routes
-      .map((r) => `${r.upstreamKind}:${r.upstreamName ?? w.name}${r.versionRange && r.versionRange !== '*' ? `@${r.versionRange}` : ''}`)
-      .join(', ') + ' (claimant route)';
-  }
+  else servedFrom = `${routeList()} (claimant route)`;
   return {
     name: dep.name,
     ecosystem: dep.ecosystem,
@@ -279,6 +286,9 @@ export function checkRow(dep: Dependency, w: WhoisLike): CheckRow {
     state: w.state,
     holder: held ? w.holder!.slug : null,
     held,
+    registered,
+    registrant: registered ? w.registrant?.name ?? null : null,
+    routesTo: registered ? w.routesTo ?? w.routes[0]?.upstreamName ?? null : null,
     servedFrom,
     routes: w.routes.map(({ versionRange, upstreamKind, upstream, upstreamName }) => ({ versionRange, upstreamKind, upstream, upstreamName })),
     url: w.url,
@@ -286,26 +296,31 @@ export function checkRow(dep: Dependency, w: WhoisLike): CheckRow {
 }
 
 export function unansweredRow(dep: Dependency, error: string): CheckRow {
-  return { name: dep.name, ecosystem: dep.ecosystem, trust: null, state: null, holder: null, held: false, servedFrom: `${INDEX_LABEL[dep.ecosystem]} (unchanged)`, routes: [], url: null, error };
+  return { name: dep.name, ecosystem: dep.ecosystem, trust: null, state: null, holder: null, held: false, registered: false, registrant: null, routesTo: null, servedFrom: `${INDEX_LABEL[dep.ecosystem]} (unchanged)`, routes: [], url: null, error };
 }
 
-/** The last line: how many names a claimant decides, and that the rest are untouched. */
+/** The last line: how many names a claimant decides (and, when any, how many
+ *  a registrant does), and that the rest are untouched. */
 export function summaryLine(rows: CheckRow[]): string {
   const held = rows.filter((r) => r.held).length;
+  const registered = rows.filter((r) => r.registered).length;
   const total = rows.length;
   const names = (n: number) => `${n} name${n === 1 ? '' : 's'}`;
   if (total === 0) return 'No names to check.';
   const indexes = [...new Set(rows.map((r) => INDEX_LABEL[r.ecosystem]))].join(' / ');
-  if (held === total) return `${held} of ${total} ${total === 1 ? 'name is' : 'names are'} claimed on rgstr; every install here resolves where its claimant says.`;
-  if (held === 0) return `0 of ${names(total)} ${total === 1 ? 'is' : 'are'} claimed on rgstr; all of them fall through to ${indexes} unchanged.`;
-  return `${held} of ${total} names are claimed on rgstr; the rest fall through to ${indexes} unchanged.`;
+  const claimed = held === 0 ? `0 of ${names(total)} ${total === 1 ? 'is' : 'are'} claimed on rgstr` : `${held} of ${total} ${total === 1 ? 'name is' : 'names are'} claimed on rgstr`;
+  const plus = registered > 0 ? ` and ${registered} registered` : '';
+  const rest = total - held - registered;
+  if (rest === 0) return `${claimed}${plus}; every install here resolves where its ${registered ? 'claimant or registrant' : 'claimant'} says.`;
+  if (rest === total) return `${claimed}; all of them fall through to ${indexes} unchanged.`;
+  return `${claimed}${plus}; the rest fall through to ${indexes} unchanged.`;
 }
 
 /** Rows as the table the human output prints. */
 export function checkTableRows(rows: CheckRow[]): string[][] {
   return rows.map((r) => [
     r.name,
-    r.error ? `? (${r.error})` : (r.trust ?? '?') + (r.state === 'disputed' ? ' (disputed)' : r.state === 'pending' ? ' (application pending)' : ''),
+    r.error ? `? (${r.error})` : r.registered ? `registered (${r.registrant ?? 'an organization'} → ${r.routesTo ?? r.name})` : (r.trust ?? '?') + (r.state === 'disputed' ? ' (disputed)' : r.state === 'pending' ? ' (application pending)' : ''),
     r.holder ?? '—',
     r.servedFrom,
   ]);

@@ -25,3 +25,16 @@ export function fmtDownloads(n: number | null | undefined): string {
   if (n >= 1_000) return `${(n / 1_000).toFixed(n >= 10_000 ? 0 : 1)}k/wk`;
   return `${n}/wk`;
 }
+
+/** `$400`, `$12.50`. */
+export function fmtUsd(n: number): string {
+  return Number.isInteger(n) ? `$${n}` : `$${n.toFixed(2)}`;
+}
+
+/** `Nov 20, 2026` — the day a window closes, in UTC like the site. */
+export function fmtDate(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+}

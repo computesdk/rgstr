@@ -125,6 +125,20 @@ describe('rows and the summary line', () => {
     expect(checkTableRows([disputed])[0][1]).toBe('claimed (disputed)');
   });
 
+  it('a registered name routes to the registrant\'s claimed name and is not counted as claimed', () => {
+    const row = checkRow(dep('fastcache'), whois('fastcache', { state: 'registered', registrant: { name: 'Acme Labs', slug: 'acme' }, routesTo: '@acme/fastcache' }));
+    expect(row).toMatchObject({ held: false, holder: null, registered: true, registrant: 'Acme Labs', routesTo: '@acme/fastcache', servedFrom: "npm:@acme/fastcache (registrant's route)" });
+    expect(checkTableRows([row])[0]).toEqual(['fastcache', 'registered (Acme Labs → @acme/fastcache)', '—', "npm:@acme/fastcache (registrant's route)"]);
+    const routed = checkRow(dep('fastcache'), whois('fastcache', { state: 'registered', registrant: { name: 'Acme Labs', slug: 'acme' }, routesTo: '@acme/fastcache', routes: [route('@acme/fastcache', '^1')] }));
+    expect(routed.servedFrom).toBe("npm:@acme/fastcache@^1 (registrant's route)");
+    const held = checkRow(dep('computesdk'), whois('computesdk', { trust: 'claimed', state: 'held', holder: { name: 'ComputeSDK', slug: 'computesdk' } }));
+    const free = checkRow(dep('react'), whois('react'));
+    expect(summaryLine([held, row, free])).toBe('1 of 3 names are claimed on rgstr and 1 registered; the rest fall through to npm unchanged.');
+    expect(summaryLine([row, free])).toBe('0 of 2 names are claimed on rgstr and 1 registered; the rest fall through to npm unchanged.');
+    expect(summaryLine([held, row])).toBe('1 of 2 names are claimed on rgstr and 1 registered; every install here resolves where its claimant or registrant says.');
+    expect(summaryLine([row])).toBe('0 of 1 name is claimed on rgstr and 1 registered; every install here resolves where its claimant or registrant says.');
+  });
+
   it('an unanswered name shows the reason and counts as not claimed', () => {
     const row = unansweredRow(dep('Bad Name'), 'Invalid package name');
     expect(row).toMatchObject({ held: false, trust: null, servedFrom: 'npm (unchanged)', error: 'Invalid package name' });

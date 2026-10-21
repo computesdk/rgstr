@@ -2,7 +2,8 @@
 
 The terminal and agent front door for [rgstr](https://rgstr.org), the package
 name registry over npm and PyPI: claim a name, prove it with the README
-badge, route it, point your installs through it.
+badge, route it, point your installs through it — or offer for an unclaimed
+name you cannot claim (a maintainer's free claim always beats an offer).
 
 | Package | What | Install |
 | --- | --- | --- |

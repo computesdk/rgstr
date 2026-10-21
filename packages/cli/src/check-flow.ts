@@ -20,6 +20,7 @@ export interface CheckResult {
   skipped: Awaited<ReturnType<typeof readDependencies>>['skipped'];
   notPointed: Dependency[];
   held: number;
+  registered: number;
   total: number;
   summary: string;
 }
@@ -77,6 +78,7 @@ export async function checkProject(g: GlobalOptions, dir: string, names: string[
     skipped: names.length ? [] : read.skipped,
     notPointed,
     held: rows.filter((r) => r.held).length,
+    registered: rows.filter((r) => r.registered).length,
     total: rows.length,
     summary,
   };
